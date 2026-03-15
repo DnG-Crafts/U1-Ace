@@ -14,7 +14,7 @@ https://www.youtube.com/watch?v=nXq-57eN3aU<br>
 
 # RFID Tags
 
-You can use NTAG 213,215 and 216 rfid tags for this mod
+You can use NTAG 213,215 and 216 rfid tags for this mod, in the app navigate to settings and enable `Ace Format` to create tags that the ace can read.
 <br>
 App to write rfid tags for the U1:  <a href=https://github.com/DnG-Crafts/U1-RFID>U1-RFID - Github</a>
 <br>
@@ -93,7 +93,7 @@ retract_length_slot4: 1150
 
 # Filament Dryer
 
-The filament dryer can be enabled or disabled from the fluidd or mainsail web ui using the following gcode commands
+The filament dryer can be enabled or disabled from the fluidd or mainsail web ui using the following gcode commands.
 
 
 Starts the dryer for 240 minutes at 55 degrees celsius.
