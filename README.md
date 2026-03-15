@@ -118,3 +118,21 @@ https://www.youtube.com/watch?v=NxCtS9ZYoLk<br>
 ### Ace pinout
 
 <img src=https://github.com/DnG-Crafts/U1-Ace/blob/main/images/ACE_PORT.jpg width=50% height=50%>
+
+<br><br>
+
+## Thankyou
+
+Thankyou to the following people
+
+<a href=https://github.com/paxx12>paxx12</a> for the extended firmware enabling the ability to mod the U1<br>
+https://github.com/paxx12/SnapmakerU1-Extended-Firmware
+<br><br>
+
+<a href=https://github.com/Jookia>Jookia</a> for the raw data dumps from the ace<br>
+https://github.com/printers-for-people/ACEResearch
+<br><br>
+
+<a href=https://github.com/utkabobr>utkabobr</a> for the python routines to keep the ace alive and responding<br>
+https://github.com/utkabobr/DuckACE/
+<br><br>
