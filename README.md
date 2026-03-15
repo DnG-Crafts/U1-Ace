@@ -89,13 +89,25 @@ retract_length_slot3: 1150
 retract_length_slot4: 1150
 
 ```
+<br><br>
+
+# Filament Dryer
+
+The filament dryer can be enabled or disabled from the fluidd or mainsail web ui using the following gcode commands
 
 
+Starts the dryer for 240 minutes at 55 degrees celsius.
+```
+ACE_START_DRYING TEMPERATURE=55 DURATION=240
+```
 
 
+Stops the dryer, there is a cooldown time before the dryer stops after running this command.
+```
+ACE_STOP_DRYING
+```
 
-
-
+<br><br>
 
 # Cable and extruder setup
 
