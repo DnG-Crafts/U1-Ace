@@ -10,6 +10,6 @@ App to write rfid tags for the U1:  <a href=https://github.com/DnG-Crafts/U1-RFI
 
 <br><br>
 
-[![https://www.youtube.com/watch?v=kbnHLlkmScc](https://img.youtube.com/vi/kbnHLlkmScc/0.jpg)](https://www.youtube.com/watch?v=kbnHLlkmScc)
+[![https://www.youtube.com/watch?v=nXq-57eN3aU](https://img.youtube.com/vi/nXq-57eN3aU/0.jpg)](https://www.youtube.com/watch?v=nXq-57eN3aU)
 
-https://www.youtube.com/watch?v=kbnHLlkmScc<br>
+https://www.youtube.com/watch?v=nXq-57eN3aU<br>
