@@ -241,8 +241,8 @@ class AceDevice:
                                 self._processed_extruders.remove(old_gate_key)
                         
                         self._last_f_stages[state_key] = actual_stage
-
-                    if assigned_extruder is not None and self._allow_triggers:
+                    is_preload = actual_stage in ["preload_finish"]
+                    if assigned_extruder is not None and (self._allow_triggers or is_preload):
                         idx = int(assigned_extruder)
                         gate_key = f"{idx}_{actual_stage}"
 
@@ -266,6 +266,13 @@ class AceDevice:
                                 logging.info("ACE: [SERIAL] -> LOAD_COMPLETE_SLOT=%d", idx)
                                 self.send_request(request = {"method": "stop_feed_assist", "params": {"index": idx}}, callback = None)
                                 self._processed_extruders.add(gate_key)
+                                
+                            elif actual_stage == "preload_finish":
+                                logging.info("ACE: PRELOAD_COMPLETE_SLOT=%d", idx)
+                                self.set_slot_rfid_info(idx)
+                                self._processed_extruders.add(gate_key)
+                                
+                                
 
         return eventtime + 0.25
 
@@ -371,65 +378,40 @@ class AceDevice:
         toolhead = self.printer.lookup_object('toolhead')
         toolhead.dwell(delay)
 
-    def get_slot_rfid_info(self, index):
-        response_event = threading.Event()
-        result_container = {'data': None, 'success': False}
-
-        def _callback(success, resp):
-            if success:
-                result_container['data'] = resp.get('params', resp.get('result', {}))
-                result_container['success'] = True
-            response_event.set()
-
-        self.send_request(request = {"method": "get_filament_info", "params": {"index": index}}, callback = _callback)
-        response_event.wait(timeout=1.0)
-
-        s = result_container['data']
-        
-        if not result_container['success'] or not s:
-            return {'rfid': 1}
-
-        if s.get('rfid', 1) != 2:
-            return {'rfid': 1}
+    def set_slot_rfid_info(self, index):
+        def _callback(ace_ref, resp):
+            if not resp or 'result' not in resp:
+                return
+                
+            s = resp.get('result', {})
             
-        sku = s.get('sku')
-        f_type = s.get('type')
-        brand = s.get('brand')
-        total_len = s.get('total')
-        color_list = s.get('color', [0, 0, 0])
-        length_map = {330:1000, 247:750, 198:600, 165:500, 82:250}
+            if s.get('rfid', 1) != 2:
+                return
+
+            sku = s.get('sku')
+            f_type = s.get('type')
+            brand = s.get('brand')
+            color_list = s.get('color', [0, 0, 0])
         
-        current_data = (sku, f_type, brand, total_len, tuple(color_list))
-        
-        if current_data != self._last_filament_data[index]:
-            import random
-            self._virtual_uids[index] = [random.randint(0, 255) for _ in range(7)]
-            self._last_filament_data[index] = current_data
+            r, g, b = color_list[0], color_list[1], color_list[2]
+            rgb_packed = "%02X%02X%02X" % (r, g, b)
+            colors_raw = s.get('colors', [[0, 0, 0, 255]])
+            alpha = colors_raw[0][3] if colors_raw and len(colors_raw[0]) > 3 else 255
+            alpha_hex = "%02X" % alpha
 
-        r, g, b = color_list[0], color_list[1], color_list[2]
-        rgb_packed = (r << 16) | (g << 8) | b
-    
-        colors_raw = s.get('colors', [[0, 0, 0, 255]])
-        alpha = colors_raw[0][3] if colors_raw and len(colors_raw[0]) > 3 else 255
+            command = (
+                f"SET_PRINT_FILAMENT_CONFIG "
+                f"CONFIG_EXTRUDER={index} "
+                f"VENDOR='{sku}' "
+                f"FILAMENT_TYPE='{f_type}' "
+                f"FILAMENT_SUBTYPE='{brand}' "
+                f"FILAMENT_COLOR_RGBA={rgb_packed}{alpha_hex}"
+            )
 
-        return {
-            'rfid': 2,
-            'vendor': sku,
-            'subtype': brand,
-            'type': f_type,
-            'color_rgb': rgb_packed,
-            'alpha': alpha,
-            'extruder_temp_min': s.get('extruder_temp', {}).get('min', 190),
-            'extruder_temp_max': s.get('extruder_temp', {}).get('max', 220),
-            'hotbed_temp_min': s.get('hotbed_temp', {}).get('min', 50),
-            'hotbed_temp_max': s.get('hotbed_temp', {}).get('max', 60),
-            'diameter': s.get('diameter', 1.75),
-            'length': total_len,
-            'weight': length_map.get(total_len, 1000),
-            'mf_date': datetime.now().strftime('%Y%m%d'),
-            'card_uid': self._virtual_uids[index]
-        }
+            self.gcode.run_script_from_command(command)
 
+        self.send_request(request={"method": "get_filament_info", "params": {"index": index}}, callback=_callback)
+ 
     cmd_ACE_START_DRYING_help = 'Start ACE filament dryer'
     def cmd_ACE_START_DRYING(self, gcmd):
         temperature = gcmd.get_int('TEMPERATURE')
