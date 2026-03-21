@@ -22,11 +22,10 @@ class AceDevice:
         self.load_speed = config.getint('load_speed', 100)
         self.retract_speed = config.getint('retract_speed', 25)
         self.max_dryer_temp = config.getint('max_dryer_temperature', 55)
-        self.enable_feed_assist = config.getint('enable_feed_assist', True)
-        self.enable_feeder_mode = config.getint('enable_feeder_mode', False)
+        self.enable_feed_assist = config.getboolean('enable_feed_assist', True)
+        self.enable_feeder_mode = config.getboolean('enable_feeder_mode', False)
 
         
-
         self.feed_lengths = [
             config.getint('feed_length_slot1', 1000),
             config.getint('feed_length_slot2', 1000),
@@ -89,14 +88,16 @@ class AceDevice:
 
     def _handle_not_printing(self, eventtime):
         logging.info("ACE: Printer is now IDLE/Ready.")
-        if self._last_active_index != -1:
-            self.send_request(request = {"method": "stop_feed_assist", "params": {"index": self._last_active_index}}, callback = None)
+        if self._last_active_index != -1 and self.enable_feed_assist:
+            for i in range(4):
+                self.send_request(request = {"method": "stop_feed_assist", "params": {"index": i}}, callback = None)
             self._last_active_index = -1
 
     def _handle_stop_print_job(self):
         logging.info("ACE: Print job stopped/completed.")
-        if self._last_active_index != -1:
-            self.send_request(request = {"method": "stop_feed_assist", "params": {"index": self._last_active_index}}, callback = None)
+        if self._last_active_index != -1 and self.enable_feed_assist:
+            for i in range(4):
+                self.send_request(request = {"method": "stop_feed_assist", "params": {"index": i}}, callback = None)
             self._last_active_index = -1
 
     def _calc_crc(self, buffer):
@@ -288,12 +289,14 @@ class AceDevice:
                                 
                             elif actual_stage == "load_fail":
                                 logging.info("ACE: [SERIAL] -> FAILED_SLOT=%d", idx)
-                                self.send_request(request = {"method": "stop_feed_assist", "params": {"index": idx}}, callback = None)
+                                if self.enable_feed_assist:
+                                    self.send_request(request = {"method": "stop_feed_assist", "params": {"index": idx}}, callback = None)
                                 self._processed_extruders.add(gate_key)                                
                                 
                             elif actual_stage == "load_finish":
                                 logging.info("ACE: [SERIAL] -> LOAD_COMPLETE_SLOT=%d", idx)
-                                self.send_request(request = {"method": "stop_feed_assist", "params": {"index": idx}}, callback = None)
+                                if self.enable_feed_assist:
+                                    self.send_request(request = {"method": "stop_feed_assist", "params": {"index": idx}}, callback = None)
                                 self._processed_extruders.add(gate_key)
                                 
                             elif actual_stage == "preload_finish":
