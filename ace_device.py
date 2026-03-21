@@ -20,8 +20,12 @@ class AceDevice:
         self.baud = config.getint('baud', 115200)
         self.feed_speed = config.getint('feed_speed', 90)
         self.load_speed = config.getint('load_speed', 100)
-        self.retract_speed = config.getint('retract_speed', 40)
+        self.retract_speed = config.getint('retract_speed', 25)
         self.max_dryer_temp = config.getint('max_dryer_temperature', 55)
+        self.enable_feed_assist = config.getint('enable_feed_assist', True)
+        self.enable_feeder_mode = config.getint('enable_feeder_mode', False)
+
+        
 
         self.feed_lengths = [
             config.getint('feed_length_slot1', 1000),
@@ -63,6 +67,7 @@ class AceDevice:
         self._pending_start_index = -1
         self._next_cmd_time = 0
 
+
         self.printer.register_event_handler('klippy:ready', self._handle_ready)
         self.printer.register_event_handler('klippy:disconnect', self._handle_disconnect)
         self.printer.register_event_handler("filament_feed:port", self._feed_handler)
@@ -72,6 +77,10 @@ class AceDevice:
  
         self.gcode.register_command('ACE_START_DRYING', self.cmd_ACE_START_DRYING)
         self.gcode.register_command('ACE_STOP_DRYING', self.cmd_ACE_STOP_DRYING)
+
+
+    def feeder_mode(self):
+        return self.enable_feeder_mode
 
 
     def _handle_start_print_job(self):
@@ -127,6 +136,21 @@ class AceDevice:
     def _feed_handler(self, channel, detect):
         self.port_sensor_hit[channel] = detect
 
+
+    def update_sensors(self, eventtime):
+        if not self.enable_feeder_mode:
+            return
+        for i in range(4):
+            sensor_name = 'filament_motion_sensor e%d_filament' % i
+            s_obj = self.printer.lookup_object(sensor_name, None)
+            if s_obj is not None:
+                status = s_obj.get_status(eventtime)
+                is_detected = status.get('filament_detected', False)
+                self.port_sensor_hit[i] = is_detected
+            else:
+                self.port_sensor_hit[i] = False
+
+
     def _attempt_connection(self):
         try:
             if self._serial:
@@ -163,7 +187,7 @@ class AceDevice:
         except: pass
 
     def _main_eval(self, eventtime):
-
+    
         print_stats = self.printer.lookup_object('print_stats', None)
         if print_stats is not None:
             stats = print_stats.get_status(eventtime)
@@ -198,14 +222,18 @@ class AceDevice:
 
                         self._last_active_tool = active_name
                         self._last_active_index = new_idx
-
-                        if old_idx != -1:
-                            self.send_request(request = {"method": "start_feed_assist", "params": {"index": new_idx}}, callback = None)
-                        else:
-                            self.send_request(request = {"method": "start_feed_assist", "params": {"index": new_idx}}, callback = None)
+                        
+                        if self.enable_feed_assist:
+                            if old_idx != -1:
+                                self.send_request(request = {"method": "start_feed_assist", "params": {"index": new_idx}}, callback = None)
+                            else:
+                                self.send_request(request = {"method": "start_feed_assist", "params": {"index": new_idx}}, callback = None)
 
                 return eventtime + 0.25
 
+
+
+        self.update_sensors(eventtime)
 
         msm = self.printer.lookup_object('machine_state_manager', None)
         fd = self.printer.lookup_object('filament_detect', None)
@@ -254,7 +282,8 @@ class AceDevice:
 
                             elif actual_stage == "load_feeding":
                                 logging.info("ACE: [SERIAL] -> LOAD_SLOT=%d", idx)
-                                self.send_request(request = {"method": "start_feed_assist", "params": {"index": idx}}, callback = None)
+                                if self.enable_feed_assist:
+                                    self.send_request(request = {"method": "start_feed_assist", "params": {"index": idx}}, callback = None)
                                 self._processed_extruders.add(gate_key)
                                 
                             elif actual_stage == "load_fail":
@@ -280,6 +309,12 @@ class AceDevice:
     def is_ready(self):
         return self._connected and bool(self._info)
 
+    def get_filament_detect(self, index):
+        if self._last_filament_status[index] == 'empty':
+            return 0
+        else:
+            return 1
+
     def _check_auto_feed(self):
         slots = self._info.get('slots', [])
         if not slots: return
@@ -288,6 +323,9 @@ class AceDevice:
             current_status = slots[i].get('status')
             
             if current_status == 'empty':
+                if self._last_filament_status[i] != 'empty':
+                    self.clear_slot_rfid_info(i)
+                    logging.info("ACE: Slot %d empty." % i)
                 self.auto_feed_step[i] = 0
                 self._last_filament_status[i] = 'empty'
                 continue
@@ -321,6 +359,10 @@ class AceDevice:
             self._last_filament_status[i] = current_status
 
     def _do_seating_move(self, i):
+        if self.enable_feeder_mode:
+            logging.debug("ACE: Slot %d move finished" % i)
+            self.set_slot_rfid_info(i)
+            return
         if self.port_sensor_hit[i]:
             logging.info("ACE: Slot %d sensor hit. Sending seating move at %d mm/s." % (i, self.load_speed))
             self.send_request(request = {"method": "feed_filament", "params": {"index": i, "length":  self.load_lengths[i], "speed": self.load_speed}}, callback = None)
@@ -405,13 +447,18 @@ class AceDevice:
                 f"VENDOR='{sku}' "
                 f"FILAMENT_TYPE='{f_type}' "
                 f"FILAMENT_SUBTYPE='{brand}' "
-                f"FILAMENT_COLOR_RGBA={rgb_packed}{alpha_hex}"
-            )
+                f"FILAMENT_COLOR_RGBA={rgb_packed}{alpha_hex}")
 
             self.gcode.run_script_from_command(command)
 
         self.send_request(request={"method": "get_filament_info", "params": {"index": index}}, callback=_callback)
- 
+
+
+    def clear_slot_rfid_info(self, index):
+        command = (f"SET_PRINT_FILAMENT_CONFIG CONFIG_EXTRUDER={index} VENDOR='' FILAMENT_TYPE='' FILAMENT_SUBTYPE='' FILAMENT_COLOR_RGBA=000000FF")
+        self.gcode.run_script_from_command(command)
+
+
     cmd_ACE_START_DRYING_help = 'Start ACE filament dryer'
     def cmd_ACE_START_DRYING(self, gcmd):
         temperature = gcmd.get_int('TEMPERATURE')
