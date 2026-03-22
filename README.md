@@ -47,7 +47,22 @@ baud: 115200
 
 feed_speed: 90
 load_speed: 100
-retract_speed: 40
+retract_speed: 25
+
+
+
+# feeder mode allows you to remove the U1 feeders on the side of the printer
+# and connect the ace directly to the back of the printer so the ace acts as the feeder
+# setting this to True will enable that functionality
+
+enable_feeder_mode: False
+
+
+
+# feed assist, setting this to False will disable feed assist
+
+enable_feed_assist: True
+
 
 
 # max temp for dryer
