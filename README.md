@@ -10,13 +10,14 @@ https://www.youtube.com/watch?v=nXq-57eN3aU<br>
 
 <br><br>
 
+# Extended Firmware
 
 To use this you must install this version of the <a href=https://github.com/DnG-Crafts/SnapmakerU1-Extended-Firmware/releases>extended firmware</a><br>
 The original version provided by <a href=https://github.com/paxx12>paxx12</a> does not have the edits required to run this script.<br>
 
 The extended firmware adds many features and fixes which you can read about <a href=https://snapmakeru1-extended-firmware.pages.dev/>HERE</a>
 
-
+<br><br>
 
 # RFID Tags
 
@@ -30,9 +31,7 @@ The android app is available on google play<br>
 
 <br><br>
 
-
-
-# Klipper settings
+# Klipper Settings
 
 To enable the script you need to add the following line to `printer.cfg`<br>
 
@@ -130,13 +129,15 @@ ACE_STOP_DRYING
 
 <br><br>
 
-# Cable and extruder setup
+# Cable and Extruder Setup
 
 [![https://www.youtube.com/watch?v=NxCtS9ZYoLk](https://img.youtube.com/vi/NxCtS9ZYoLk/0.jpg)](https://www.youtube.com/watch?v=NxCtS9ZYoLk)
 
 https://www.youtube.com/watch?v=NxCtS9ZYoLk<br>
 
-### Ace pinout
+<br><br>
+
+### Ace Pinout
 
 <img src=https://github.com/DnG-Crafts/U1-Ace/blob/main/images/ACE_PORT.jpg width=50% height=50%>
 
