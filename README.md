@@ -20,7 +20,7 @@ App to write rfid tags for the U1:  <a href=https://github.com/DnG-Crafts/U1-RFI
 <br>
 
 The android app is available on google play<br>
-<a href="https://play.google.com/store/apps/details?id=dngsoftware.u1fid&hl=en"><img src=https://github.com/DnG-Crafts/U1-Ace/blob/main/images/gp.webp width="20%" height="20%"></a>
+<a href="https://play.google.com/store/apps/details?id=dngsoftware.u1rfid&hl=en"><img src=https://github.com/DnG-Crafts/U1-Ace/blob/main/images/gp.webp width="20%" height="20%"></a>
 
 <br><br>
 
