@@ -56,8 +56,9 @@ retract_speed: 25
 
 
 
-# feeder mode allows you to remove the U1 feeders on the side of the printer
-# and connect the ace directly to the back of the printer so the ace acts as the feeder
+# feeder mode allows you to leave the original U1 feeders on the printer
+# and connect the ace to the U1 feeders on the sides of the printer.
+# this allows you to still use the side spools if you needed.
 # setting this to True will enable that functionality
 
 enable_feeder_mode: False

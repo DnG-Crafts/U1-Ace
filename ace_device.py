@@ -149,7 +149,7 @@ class AceDevice:
         self.port_sensor_hit[channel] = detect
 
     def update_sensors(self, eventtime):
-        if not self.enable_feeder_mode:
+        if self.enable_feeder_mode:
             return
         for i in range(4):
             sensor_name = 'filament_motion_sensor e%d_filament' % i
@@ -421,7 +421,7 @@ class AceDevice:
             self._last_filament_status[i] = current_status
 
     def _do_seating_move(self, i):
-        if self.enable_feeder_mode:
+        if not self.enable_feeder_mode:
             logging.debug("ACE: Slot %d move finished" % i)
             self.set_slot_rfid_info(i)
             return
