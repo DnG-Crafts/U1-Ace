@@ -103,10 +103,10 @@ load_length_slot4: 850
 # if you do not like the loose filament on the spool set these values to 100 which
 # is enough to clear the extruder but should not cause the loose filament issue shown in the video
 
-retract_length_slot1: 1150
-retract_length_slot2: 1150
-retract_length_slot3: 1150
-retract_length_slot4: 1150
+retract_length_slot1: 100
+retract_length_slot2: 100
+retract_length_slot3: 100
+retract_length_slot4: 100
 
 ```
 <br><br>
@@ -157,4 +157,8 @@ https://github.com/printers-for-people/ACEResearch
 
 <a href=https://github.com/utkabobr>utkabobr</a> for the python routines to keep the ace alive and responding<br>
 https://github.com/utkabobr/DuckACE/
+<br><br>
+
+<a href=https://github.com/BlackFrogKok>BlackFrogKok</a> for the edit locations in the filament_feed.py to disable the factory feeders<br>
+https://github.com/BlackFrogKok/SnapAce/
 <br><br>

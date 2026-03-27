@@ -8,13 +8,13 @@ class AceDevice:
         self.printer.add_object('ace_device', self)
         self.reactor = self.printer.get_reactor()
         self.gcode = self.printer.lookup_object('gcode')
-
+        
+        self.serial_name = config.get('serial', '/dev/serial/by-id/usb-ANYCUBIC_ACE_1-if00')
         all_devices = glob.glob('/dev/serial/by-id/usb-ANYCUBIC*')
         if all_devices:
             self.serial_name = all_devices[0]
             logging.info("ACE: Found serial port: %s", self.serial_name)
         else:
-            self.serial_name = config.get('serial', '/dev/serial/by-id/usb-ANYCUBIC_ACE_1-if00')
             logging.info("ACE: No devices auto detected, Using config serial path %s", self.serial_name)
 
         self.baud = config.getint('baud', 115200)
@@ -41,10 +41,10 @@ class AceDevice:
         ]
 
         self.retract_lengths = [
-            config.getint('retract_length_slot1', 1150),
-            config.getint('retract_length_slot2', 1150),
-            config.getint('retract_length_slot3', 1150),
-            config.getint('retract_length_slot4', 1150)
+            config.getint('retract_length_slot1', 100),
+            config.getint('retract_length_slot2', 100),
+            config.getint('retract_length_slot3', 100),
+            config.getint('retract_length_slot4', 100)
         ]
 
 
@@ -60,12 +60,16 @@ class AceDevice:
         self._initialized = False
         self.port_sensor_hit = [False, False, False, False]
         self._last_filament_status = ['empty', 'empty', 'empty', 'empty']
+        self._active_feeds = set()
+        self._feed_start_times = {}
+        self._timeout_threshold = 30.0
+        self.feed_retries = [0, 0, 0, 0]
         self.auto_feed_step = [0, 0, 0, 0]
         self._last_active_tool = None
         self._last_active_index = -1
         self._pending_start_index = -1
         self._next_cmd_time = 0
-
+        
 
         self.printer.register_event_handler('klippy:ready', self._handle_ready)
         self.printer.register_event_handler('klippy:disconnect', self._handle_disconnect)
@@ -84,6 +88,9 @@ class AceDevice:
 
     def _handle_start_print_job(self):
         logging.info("ACE: Print job started.")
+        self._last_active_index = -1
+        self._last_active_tool = None
+         
 
 
     def _handle_not_printing(self, eventtime):
@@ -91,14 +98,18 @@ class AceDevice:
         if self._last_active_index != -1 and self.enable_feed_assist:
             for i in range(4):
                 self.send_request(request = {"method": "stop_feed_assist", "params": {"index": i}}, callback = None)
-            self._last_active_index = -1
+        self._last_active_index = -1
+        self._last_active_tool = None
+ 
 
     def _handle_stop_print_job(self):
         logging.info("ACE: Print job stopped/completed.")
         if self._last_active_index != -1 and self.enable_feed_assist:
             for i in range(4):
                 self.send_request(request = {"method": "stop_feed_assist", "params": {"index": i}}, callback = None)
-            self._last_active_index = -1
+        self._last_active_index = -1
+        self._last_active_tool = None
+  
 
     def _calc_crc(self, buffer):
         _crc = 0xffff
@@ -137,7 +148,6 @@ class AceDevice:
     def _feed_handler(self, channel, detect):
         self.port_sensor_hit[channel] = detect
 
-
     def update_sensors(self, eventtime):
         if not self.enable_feeder_mode:
             return
@@ -151,6 +161,15 @@ class AceDevice:
             else:
                 self.port_sensor_hit[i] = False
 
+    def get_sensor_state(self, index, eventtime):
+        sensor_name = 'filament_motion_sensor e%d_filament' % index
+        s_obj = self.printer.lookup_object(sensor_name, None)
+        if s_obj is not None:
+            status = s_obj.get_status(eventtime)
+            is_detected = status.get('filament_detected', False)
+            return is_detected
+        else:
+            return False
 
     def _attempt_connection(self):
         try:
@@ -234,6 +253,22 @@ class AceDevice:
 
 
 
+        if not self.enable_feed_assist:
+            feeds_to_remove = []
+            for idx in self._active_feeds:
+                if self.get_sensor_state(idx, eventtime):
+                    self.send_request(request={"method": "stop_feed_filament", "params": {"index": idx}}, callback=None)
+                    feeds_to_remove.append(idx)
+                elif eventtime > self._feed_start_times.get(idx, 0) + self._timeout_threshold:
+                    logging.warning("ACE: Feed slot %d TIMEOUT. Stopping." % idx)
+                    self.send_request(request={"method": "stop_feed_filament", "params": {"index": idx}}, callback=None)
+                    feeds_to_remove.append(idx)
+        
+            for idx in feeds_to_remove:
+                self._active_feeds.discard(idx)
+                self._feed_start_times.pop(idx, None)
+
+
         self.update_sensors(eventtime)
 
         msm = self.printer.lookup_object('machine_state_manager', None)
@@ -280,23 +315,38 @@ class AceDevice:
                                 logging.info("ACE: [SERIAL] -> UNWIND_SLOT=%d", idx)
                                 self.send_request(request = {"method": "unwind_filament", "params": {"index": idx, "length": self.retract_lengths[idx], "speed": self.retract_speed}}, callback = None)
                                 self._processed_extruders.add(gate_key)
-
+                                
                             elif actual_stage == "load_feeding":
                                 logging.info("ACE: [SERIAL] -> LOAD_SLOT=%d", idx)
                                 if self.enable_feed_assist:
                                     self.send_request(request = {"method": "start_feed_assist", "params": {"index": idx}}, callback = None)
+                                else:
+                                    if not self.get_sensor_state(idx, eventtime):
+                                        self.send_request(request = {"method": "feed_filament", "params": {"index": idx, "length": self.feed_lengths[idx] * 2, "speed": 50}}, callback = None)
+                                        self._feed_start_times[idx] = eventtime
+                                        self._active_feeds.add(idx) 
+                                    else:
+                                        self.send_request(request = {"method": "stop_feed_filament", "params": {"index": idx}}, callback = None)
                                 self._processed_extruders.add(gate_key)
                                 
                             elif actual_stage == "load_fail":
                                 logging.info("ACE: [SERIAL] -> FAILED_SLOT=%d", idx)
                                 if self.enable_feed_assist:
                                     self.send_request(request = {"method": "stop_feed_assist", "params": {"index": idx}}, callback = None)
+                                else:
+                                    self.send_request(request = {"method": "stop_feed_filament", "params": {"index": idx}}, callback = None)
+                                    self._active_feeds.discard(idx)
+                                    self._feed_start_times.pop(idx, None)
                                 self._processed_extruders.add(gate_key)                                
                                 
                             elif actual_stage == "load_finish":
                                 logging.info("ACE: [SERIAL] -> LOAD_COMPLETE_SLOT=%d", idx)
                                 if self.enable_feed_assist:
                                     self.send_request(request = {"method": "stop_feed_assist", "params": {"index": idx}}, callback = None)
+                                else:
+                                    self.send_request(request = {"method": "stop_feed_filament", "params": {"index": idx}}, callback = None)
+                                    self._active_feeds.discard(idx)
+                                    self._feed_start_times.pop(idx, None)
                                 self._processed_extruders.add(gate_key)
                                 
                             elif actual_stage == "preload_finish":
@@ -330,6 +380,7 @@ class AceDevice:
                     self.clear_slot_rfid_info(i)
                     logging.info("ACE: Slot %d empty." % i)
                 self.auto_feed_step[i] = 0
+                self.feed_retries[i] = 0
                 self._last_filament_status[i] = 'empty'
                 continue
 
@@ -344,11 +395,19 @@ class AceDevice:
                     logging.info("ACE: Slot %d SENSOR HIT! Moving to Seating (Step 2)." % i)
                     self.send_request(request = {"method": "stop_feed_filament", "params": {"index": i}}, callback = None)
                     self.auto_feed_step[i] = 2
+                    self.feed_retries[i] = 0
                 else:
                     if current_status != 'feeding':
-                        logging.debug("ACE: Slot %d feeding... (Sensor Empty)" % i)
-                        self.send_request(request = {"method": "feed_filament", "params": {"index": i, "length":  self.feed_lengths[i], "speed": self.feed_speed}}, callback = None)
-
+                        if self.feed_retries[i] < 2:
+                            if self.feed_retries[i] == 1:
+                                self.send_request(request = {"method": "feed_filament", "params": {"index": i, "length": self.feed_lengths[i] / 2, "speed": self.feed_speed}}, callback = None)
+                            else:
+                                self.send_request(request = {"method": "feed_filament", "params": {"index": i, "length": self.feed_lengths[i], "speed": self.feed_speed}}, callback = None)
+                            logging.info("ACE: Slot %d feeding (Attempt %d)..." % (i, self.feed_retries[i] + 1))
+                            self.feed_retries[i] += 1
+                        else:
+                            self.feed_retries[i] = 0
+                            self.auto_feed_step[i] = 2
 
             elif self.auto_feed_step[i] == 2:
                 logging.info("ACE: Slot %d performing final seating move." % i)
