@@ -4,9 +4,9 @@ Adding the Anycubic ACE to the U1 printer
 
 <br><br>
 
-[![https://www.youtube.com/watch?v=nXq-57eN3aU](https://img.youtube.com/vi/nXq-57eN3aU/0.jpg)](https://www.youtube.com/watch?v=nXq-57eN3aU)
+[![https://www.youtube.com/watch?v=YoNCkkrdzvg](https://img.youtube.com/vi/YoNCkkrdzvg/0.jpg)](https://www.youtube.com/watch?v=YoNCkkrdzvg)
 
-https://www.youtube.com/watch?v=nXq-57eN3aU<br>
+https://www.youtube.com/watch?v=YoNCkkrdzvg<br>
 
 <br><br>
 
