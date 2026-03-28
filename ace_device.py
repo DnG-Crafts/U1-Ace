@@ -322,7 +322,7 @@ class AceDevice:
                                     self.send_request(request = {"method": "start_feed_assist", "params": {"index": idx}}, callback = None)
                                 else:
                                     if not self.get_sensor_state(idx, eventtime):
-                                        self.send_request(request = {"method": "feed_filament", "params": {"index": idx, "length": self.feed_lengths[idx] * 2, "speed": 50}}, callback = None)
+                                        self.send_request(request = {"method": "feed_filament", "params": {"index": idx, "length": 3000, "speed": 50}}, callback = None)
                                         self._feed_start_times[idx] = eventtime
                                         self._active_feeds.add(idx) 
                                     else:
