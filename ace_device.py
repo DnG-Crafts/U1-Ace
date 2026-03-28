@@ -62,7 +62,7 @@ class AceDevice:
         self._last_filament_status = ['empty', 'empty', 'empty', 'empty']
         self._active_feeds = set()
         self._feed_start_times = {}
-        self._timeout_threshold = 30.0
+        self._timeout_threshold = 60.0
         self.feed_retries = [0, 0, 0, 0]
         self.auto_feed_step = [0, 0, 0, 0]
         self._last_active_tool = None
