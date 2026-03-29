@@ -31,17 +31,21 @@ The android app is available on google play<br>
 
 <br><br>
 
+# Enable Ace Mod
+
+To enable the ace mod use a web brower and navigate to 'http://PRINTER-IP/firmware-config/' and you will find the Ace Mod options<br>
+<img src=https://github.com/DnG-Crafts/U1-Ace/blob/main/images/ace_options.png width="50%" height="50%">
+
+<br><br>
+
 # Klipper Settings
 
-To enable the script you need to add the following line to `printer.cfg`<br>
+These are the default config values found in '/extended/mods/ace_device.cfg', you do not need to modify these unless there is an issue.
 
 ```
 [ace_device]
-```
 
-You only need the above line but optional variables can be added to modify how the ace works.
 
-```
 # these are the serial connection options and should not need to be modified
 
 serial: /dev/serial/by-id/usb-ANYCUBIC_ACE_1-if00
