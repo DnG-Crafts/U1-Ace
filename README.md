@@ -34,7 +34,7 @@ The android app is available on google play<br>
 # Enable Ace Mod
 
 To enable the ace mod use a web brower and navigate to 'http://PRINTER-IP/firmware-config/' and you will find the Ace Mod options<br>
-<img src=https://github.com/DnG-Crafts/U1-Ace/blob/main/images/ace_options.png width="50%" height="50%">
+<img src=https://github.com/DnG-Crafts/U1-Ace/blob/main/images/ace_options.png width="70%" height="70%">
 
 <br><br>
 
