@@ -40,7 +40,7 @@ To enable the ace mod use a web brower and navigate to `http://PRINTER-IP/firmwa
 
 # Klipper Settings
 
-These are the default config values found in '/extended/mods/ace_device.cfg', you do not need to modify these unless there is an issue.
+These are the default config values found in `/extended/mods/ace_device.cfg`, you do not need to modify these unless there is an issue.
 
 ```
 [ace_device]
