@@ -81,6 +81,7 @@ class AceDevice:
  
         self.gcode.register_command('ACE_START_DRYING', self.cmd_ACE_START_DRYING)
         self.gcode.register_command('ACE_STOP_DRYING', self.cmd_ACE_STOP_DRYING)
+        self.gcode.register_command('SET_FILAMENT_CONFIG', self.cmd_SET_FILAMENT_CONFIG)
 
 
     def feeder_mode(self):
