@@ -1,6 +1,7 @@
 # https://github.com/DnG-Crafts/U1-Ace
-import serial, threading, time, logging, json, struct, queue, traceback, glob
+import serial, threading, time, logging, json, struct, queue, traceback, glob, copy, random
 from datetime import datetime
+from . import filament_protocol
 
 class AceDevice:
     def __init__(self, config):
@@ -120,6 +121,7 @@ class AceDevice:
             _crc = ((data << 8) | (_crc >> 8)) ^ (data >> 4) ^ (data << 3)
         return _crc & 0xffff
 
+
     def _send_request(self, request):
         if not self._connected or not self._serial:
             return
@@ -132,21 +134,26 @@ class AceDevice:
             logging.error("ACE: Serial write failed, disconnecting: %s" % str(e))
             self._connected = False
 
+
     def send_request(self, request, callback):
         self._queue.put([request, callback])
+
 
     def _handle_ready(self):
         self.connection_timer = self.reactor.register_timer(
             self._connection_timer, self.reactor.NOW)    
         logging.info("ACE: Connection monitor started")
 
+
     def _connection_timer(self, eventtime):
         if not self._connected:
             self._attempt_connection()
         return eventtime + (5.0 if not self._connected else 20.0)
 
+
     def _feed_handler(self, channel, detect):
         self.port_sensor_hit[channel] = detect
+
 
     def update_sensors(self, eventtime):
         if self.enable_feeder_mode:
@@ -161,6 +168,7 @@ class AceDevice:
             else:
                 self.port_sensor_hit[i] = False
 
+
     def get_sensor_state(self, index, eventtime):
         sensor_name = 'filament_motion_sensor e%d_filament' % index
         s_obj = self.printer.lookup_object(sensor_name, None)
@@ -170,6 +178,7 @@ class AceDevice:
             return is_detected
         else:
             return False
+
 
     def _attempt_connection(self):
         try:
@@ -197,6 +206,7 @@ class AceDevice:
             self._connected = False
             logging.error("ACE: Connection attempt failed: %s" % str(e))
 
+
     def _handle_disconnect(self):
         self._connected = False
         if self._serial:
@@ -205,6 +215,7 @@ class AceDevice:
         self._serial = None
         try: self.reactor.unregister_timer(self.main_timer)
         except: pass
+
 
     def _main_eval(self, eventtime):
     
@@ -362,11 +373,13 @@ class AceDevice:
     def is_ready(self):
         return self._connected and bool(self._info)
 
+
     def get_filament_detect(self, index):
         if self._last_filament_status[index] == 'empty':
             return 0
         else:
             return 1
+
 
     def _check_auto_feed(self):
         slots = self._info.get('slots', [])
@@ -420,6 +433,7 @@ class AceDevice:
             
             self._last_filament_status[i] = current_status
 
+
     def _do_seating_move(self, i):
         if not self.enable_feeder_mode:
             logging.debug("ACE: Slot %d move finished" % i)
@@ -431,10 +445,12 @@ class AceDevice:
         else:
             logging.warning("ACE: Slot %d primary move finished but Printer %d sensor is EMPTY." % (i, i))
 
+
     def _handle_status_update(self, printer_instance, response):
         if 'result' in response: 
             self._info = response['result']
             self._check_auto_feed()
+
 
     def _writer(self):
         while self._connected:
@@ -459,6 +475,7 @@ class AceDevice:
                 logging.error("ACE Writer error: %s" % str(e))
                 time.sleep(0.5)
 
+
     def _reader(self):
         while self._connected:
             try:
@@ -478,9 +495,11 @@ class AceDevice:
             except:
                 time.sleep(0.1)
 
+
     def dwell(self, delay):
         toolhead = self.printer.lookup_object('toolhead')
         toolhead.dwell(delay)
+
 
     def set_slot_rfid_info(self, index):
         def _callback(ace_ref, resp):
@@ -499,26 +518,75 @@ class AceDevice:
         
             r, g, b = color_list[0], color_list[1], color_list[2]
             rgb_packed = "%02X%02X%02X" % (r, g, b)
+            rgb_ipacked = (r << 16) | (g << 8) | b
             colors_raw = s.get('colors', [[0, 0, 0, 255]])
             alpha = colors_raw[0][3] if colors_raw and len(colors_raw[0]) > 3 else 255
             alpha_hex = "%02X" % alpha
-
-            command = (
-                f"SET_PRINT_FILAMENT_CONFIG "
-                f"CONFIG_EXTRUDER={index} "
-                f"VENDOR='{sku}' "
-                f"FILAMENT_TYPE='{f_type}' "
-                f"FILAMENT_SUBTYPE='{brand}' "
-                f"FILAMENT_COLOR_RGBA={rgb_packed}{alpha_hex}")
-
-            self.gcode.run_script_from_command(command)
+            filament_detect = self.printer.lookup_object('filament_detect', None)
+            if filament_detect is None:
+                command = (
+                    f"SET_PRINT_FILAMENT_CONFIG "
+                    f"CONFIG_EXTRUDER={index} "
+                    f"VENDOR='{sku}' "
+                    f"FILAMENT_TYPE='{f_type}' "
+                    f"FILAMENT_SUBTYPE='{brand}' "
+                    f"FILAMENT_COLOR_RGBA={rgb_packed}{alpha_hex}")
+                self.gcode.run_script_from_command(command)
+            else:
+                length_map = {330:1000, 247:750, 198:600, 165:500, 82:250}
+                total_len = s.get('total')
+                info = copy.deepcopy(filament_protocol.FILAMENT_INFO_STRUCT)
+                info['VERSION'] = 1
+                info['VENDOR'] = sku
+                info['MANUFACTURER'] = sku
+                info['MAIN_TYPE'] = f_type
+                info['SUB_TYPE'] = brand
+                info['COLOR_NUMS'] = 1
+                info['RGB_1'] = rgb_ipacked
+                try:
+                    info['ALPHA'] = max(0x00, min(0xFF, int(alpha)))
+                except (ValueError, TypeError):
+                    info['ALPHA'] = 0xFF
+                info['ARGB_COLOR'] = info['ALPHA'] << 24 | info['RGB_1']
+                info['OFFICIAL'] = True
+                info['LENGTH'] = total_len
+                try:
+                    info['DIAMETER'] = int(round(float(s.get('diameter', 1.75)) * 100))
+                except:
+                    info['DIAMETER'] = 175
+                try:
+                    info['WEIGHT'] = int(length_map.get(total_len, 1000))
+                except:
+                    info['WEIGHT'] = 1000
+                try:
+                    info['HOTEND_MIN_TEMP'] = int(s.get('extruder_temp', {}).get('min', 190))
+                    info['HOTEND_MAX_TEMP'] = int(s.get('extruder_temp', {}).get('max', 220))
+                except:
+                    info['HOTEND_MIN_TEMP'] = 0
+                    info['HOTEND_MAX_TEMP'] = 0
+                try:
+                    bed_min_temp = int(s.get('hotbed_temp', {}).get('min', 50))
+                    bed_max_temp = int(s.get('hotbed_temp', {}).get('max', 60))
+                    info['BED_TEMP'] = bed_min_temp if bed_min_temp > 0 else bed_max_temp
+                except:
+                    info['BED_TEMP'] = 0
+                info['FIRST_LAYER_TEMP'] = info['HOTEND_MIN_TEMP']
+                info['OTHER_LAYER_TEMP'] = info['HOTEND_MIN_TEMP']
+                info['MF_DATE'] = datetime.now().strftime("%Y%m%d")
+                info['CARD_UID'] = [random.randint(0, 255) for _ in range(7)]
+                filament_detect._filament_info_update(index, info, is_clear=True)
 
         self.send_request(request={"method": "get_filament_info", "params": {"index": index}}, callback=_callback)
-
+        
 
     def clear_slot_rfid_info(self, index):
-        command = (f"SET_PRINT_FILAMENT_CONFIG CONFIG_EXTRUDER={index} VENDOR='' FILAMENT_TYPE='' FILAMENT_SUBTYPE='' FILAMENT_COLOR_RGBA=000000FF")
-        self.gcode.run_script_from_command(command)
+        filament_detect = self.printer.lookup_object('filament_detect', None)
+        if filament_detect is None:
+            command = (f"SET_PRINT_FILAMENT_CONFIG CONFIG_EXTRUDER={index} VENDOR='' FILAMENT_TYPE='' FILAMENT_SUBTYPE='' FILAMENT_COLOR_RGBA=000000FF")
+            self.gcode.run_script_from_command(command)
+        else:
+            info = copy.deepcopy(filament_protocol.FILAMENT_INFO_STRUCT)
+            filament_detect._filament_info_update(index, info, is_clear=True)
 
 
     cmd_ACE_START_DRYING_help = 'Start ACE filament dryer'
@@ -535,6 +603,7 @@ class AceDevice:
             self.gcode.respond_info('Started ACE drying')
         self.send_request(request = {"method": "drying", "params": {"temp":temperature, "fan_speed": 7000, "duration": duration}}, callback = callback)
 
+
     cmd_ACE_STOP_DRYING_help = 'Stop ACE filament dryer'
     def cmd_ACE_STOP_DRYING(self, gcmd):
         def callback(self, response):
@@ -542,6 +611,62 @@ class AceDevice:
                 raise gcmd.error("ACE Error: " + response['msg'])
             self.gcode.respond_info('Stopped ACE drying')
         self.send_request(request = {"method":"drying_stop"}, callback = callback)
+
+
+    cmd_SET_FILAMENT_CONFIG_help = 'Set filament information'
+    def cmd_SET_FILAMENT_CONFIG(self, gcmd):
+        channel = gcmd.get_int('CHANNEL')
+        vendor = gcmd.get('VENDOR', '')
+        type = gcmd.get('TYPE', '')
+        subtype = gcmd.get('SUBTYPE', '')
+        color = gcmd.get('COLOR', '000000')
+        alpha = gcmd.get('ALPHA', 'FF')
+        official = gcmd.get('OFFICIAL', False)
+        length = gcmd.get_int('LENGTH', 330)
+        diameter = gcmd.get_int('DIAMETER', 175)
+        weight = gcmd.get_int('WEIGHT', 1000)
+        extruder_temp_min = gcmd.get_int('EXT_TEMP_MIN', 190)
+        extruder_temp_max = gcmd.get_int('EXT_TEMP_MAX', 220)
+        hotbed_temp_min = gcmd.get_int('BED_TEMP_MIN', 50)
+        hotbed_temp_max = gcmd.get_int('BED_TEMP_MAX', 60)
+        
+        if channel < 0 or channel >= 4:
+            raise gcmd.error("ACE channel{} is out of range[0, 3]".format(channel))
+ 
+        filament_detect = self.printer.lookup_object('filament_detect')
+        if filament_detect is None:
+            command = (
+                f"SET_PRINT_FILAMENT_CONFIG "
+                f"CONFIG_EXTRUDER={channel} "
+                f"VENDOR='{vendor}' "
+                f"FILAMENT_TYPE='{type}' "
+                f"FILAMENT_SUBTYPE='{subtype}' "
+                f"FILAMENT_COLOR_RGBA={color}{alpha}")
+            self.gcode.run_script_from_command(command)
+        else:
+            info = copy.deepcopy(filament_protocol.FILAMENT_INFO_STRUCT)
+            info['VERSION'] = 1
+            info['VENDOR'] = vendor
+            info['MANUFACTURER'] = vendor
+            info['MAIN_TYPE'] = type
+            info['SUB_TYPE'] = subtype
+            info['COLOR_NUMS'] = 1
+            info['RGB_1'] = int(color, 16)
+            info['ALPHA'] = int(alpha, 16)
+            info['ARGB_COLOR'] = (int(alpha, 16) << 24) | int(color, 16)
+            info['OFFICIAL'] = official
+            info['LENGTH'] = length
+            info['DIAMETER'] = diameter
+            info['WEIGHT'] = weight
+            info['HOTEND_MIN_TEMP'] = extruder_temp_min
+            info['HOTEND_MAX_TEMP'] = extruder_temp_max
+            info['BED_TEMP'] = hotbed_temp_min if hotbed_temp_min > 0 else hotbed_temp_max
+            info['FIRST_LAYER_TEMP'] = info['HOTEND_MIN_TEMP']
+            info['OTHER_LAYER_TEMP'] = info['HOTEND_MIN_TEMP']
+            info['MF_DATE'] = datetime.now().strftime("%Y%m%d")
+            info['CARD_UID'] = [random.randint(0, 255) for _ in range(7)]
+            filament_detect._filament_info_update(channel, info, is_clear=True)
+            self.gcode.respond_info(str(info))
 
 
 def load_config(config):
