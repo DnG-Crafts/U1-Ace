@@ -1,3 +1,4 @@
+#Version 2
 import logging, copy, os
 from . import pulse_counter
 
