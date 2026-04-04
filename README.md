@@ -4,7 +4,7 @@ Adding the Anycubic ACE to the U1 printer
 
 <br><br>
 
-[![https://www.youtube.com/watch?v=sk9fGzlz-C4](https://img.youtube.com/vi/YoNCkkrdzvg/0.jpg)](https://www.youtube.com/watch?v=sk9fGzlz-C4)
+[![https://www.youtube.com/watch?v=sk9fGzlz-C4](https://img.youtube.com/vi/sk9fGzlz-C4/0.jpg)](https://www.youtube.com/watch?v=sk9fGzlz-C4)
 
 https://www.youtube.com/watch?v=sk9fGzlz-C4<br>
 
