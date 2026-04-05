@@ -47,6 +47,7 @@ class FilamentEntangleDetect:
         self.detection_length = ENTANGLE_DETECT_LENGTH_DEFAULT
         self.last_log_time = 0
         self.ace_device = None
+
         config_dir = self.printer.get_snapmaker_config_dir()
         config_name = self.name + POSTFIX_CONFIG_FILE
         self.config_path = os.path.join(config_dir, config_name)
@@ -115,7 +116,7 @@ class FilamentEntangleDetect:
             
         if self.ace_device is not None and self.ace_device.feed_assist():
             self.detection_length = ENTANGLE_DETECT_LENGTH_DEFAULT_TPU_85
-
+            
         self.last_position = self._get_extruder_pos()
         self.skip_length_remained = self.skip_length
         self.last_wheel_counts = self.filament_feed_module.wheel[self.filament_feed_channel].get_counts()
