@@ -1,4 +1,4 @@
-#Version 2
+#Version 3
 # https://github.com/DnG-Crafts/U1-Ace
 import serial, threading, time, logging, json, struct, queue, traceback, glob, copy, random
 from datetime import datetime
@@ -65,8 +65,8 @@ class AceDevice:
         self._active_feeds = set()
         self._feed_start_times = {}
         self._timeout_threshold = 60.0
-        self.feed_retries = [0, 0, 0, 0]
         self.auto_feed_step = [0, 0, 0, 0]
+        self.feed_sent = [False, False, False, False]
         self._last_active_tool = None
         self._last_active_index = -1
         self._pending_start_index = -1
@@ -386,6 +386,7 @@ class AceDevice:
     def _check_auto_feed(self):
         slots = self._info.get('slots', [])
         if not slots: return
+        ace_is_busy = any(s.get('status') in ['feeding', 'preload'] for s in slots)
 
         for i in range(min(len(slots), 4)):
             current_status = slots[i].get('status')
@@ -395,39 +396,44 @@ class AceDevice:
                     self.clear_slot_rfid_info(i)
                     logging.info("ACE: Slot %d empty." % i)
                 self.auto_feed_step[i] = 0
-                self.feed_retries[i] = 0
+                self.feed_sent[i] = False
                 self._last_filament_status[i] = 'empty'
                 continue
 
             if self.auto_feed_step[i] == 0:
                 prev_status = self._last_filament_status[i]
                 if prev_status == 'preload' and current_status == 'ready':
-                    logging.info("ACE: Slot %d trigger. Entering Incremental Feed (Step 1)." % i)
+                    logging.info("ACE: Slot %d trigger. Entering Incremental Feed" % i)
                     self.auto_feed_step[i] = 1
+                    self.feed_sent[i] = False
 
             elif self.auto_feed_step[i] == 1:
                 if self.port_sensor_hit[i]:
-                    logging.info("ACE: Slot %d SENSOR HIT! Moving to Seating (Step 2)." % i)
+                    logging.info("ACE: Slot %d SENSOR HIT! Moving to Seating" % i)
                     self.send_request(request = {"method": "stop_feed_filament", "params": {"index": i}}, callback = None)
                     self.auto_feed_step[i] = 2
-                    self.feed_retries[i] = 0
+                    self.feed_sent[i] = False
+                
+                elif self.feed_sent[i] and current_status == 'ready' and not ace_is_busy:
+                    logging.warning("ACE: Slot %d move completed. Advancing to seating." % i)
+                    self.auto_feed_step[i] = 2
+                    self.feed_sent[i] = False
+
                 else:
-                    if current_status != 'feeding':
-                        if self.feed_retries[i] < 2:
-                            if self.feed_retries[i] == 1:
-                                self.send_request(request = {"method": "feed_filament", "params": {"index": i, "length": self.feed_lengths[i] / 2, "speed": self.feed_speed}}, callback = None)
-                            else:
-                                self.send_request(request = {"method": "feed_filament", "params": {"index": i, "length": self.feed_lengths[i], "speed": self.feed_speed}}, callback = None)
-                            logging.info("ACE: Slot %d feeding (Attempt %d)..." % (i, self.feed_retries[i] + 1))
-                            self.feed_retries[i] += 1
-                        else:
-                            self.feed_retries[i] = 0
-                            self.auto_feed_step[i] = 2
+                    if current_status == 'ready' and not self.feed_sent[i] and not ace_is_busy:
+                        logging.info("ACE: Slot %d - Motor is free. Sending feed command." % i)
+                        self.send_request(request = {"method": "feed_filament", "params": {"index": i, "length": self.feed_lengths[i], "speed": self.feed_speed}}, callback = None)
+                        
+                        if not self.enable_feeder_mode:
+                            self.feed_sent[i] = True
+                            ace_is_busy = True 
 
             elif self.auto_feed_step[i] == 2:
-                logging.info("ACE: Slot %d performing final seating move." % i)
-                self._do_seating_move(i)
-                self.auto_feed_step[i] = 3
+                if not ace_is_busy:
+                    logging.info("ACE: Slot %d performing final seating move." % i)
+                    self._do_seating_move(i)
+                    self.auto_feed_step[i] = 3
+                    ace_is_busy = True
 
             elif self.auto_feed_step[i] == 3:
                 if current_status == 'ready':
