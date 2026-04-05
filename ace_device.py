@@ -88,6 +88,8 @@ class AceDevice:
     def feeder_mode(self):
         return self.enable_feeder_mode
 
+    def feed_assist(self):
+        return self.enable_feed_assist
 
     def _handle_start_print_job(self):
         logging.info("ACE: Print job started.")
