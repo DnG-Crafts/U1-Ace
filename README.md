@@ -38,6 +38,15 @@ To enable the ace mod use a web brower and navigate to `http://PRINTER-IP/firmwa
 
 <br><br>
 
+
+# Update Ace Mod
+
+To update the ace mod use a web brower and navigate to `http://PRINTER-IP/firmware-config/` and you will find `Updater` in the Ace Mod options<br>
+Select `Update Now` and the script will check for updates and apply them
+
+<br><br>
+
+
 # Klipper Settings
 
 These are the default config values found in `/extended/mods/ace_device.cfg`, you do not need to modify these unless there is an issue.
