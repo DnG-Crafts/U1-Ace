@@ -1,4 +1,3 @@
-#Version 2
 import logging, copy, os
 from . import pulse_counter
 
@@ -896,7 +895,7 @@ class FilamentFeed:
                             
                             preload_min_speed = FEED_PRELOAD_MOTOR_MIN_SPEED                            
                             if self.ace_device is not None:    
-                                preload_min_speed = 50
+                                preload_min_speed = 10
 
                             if motor_speed < preload_min_speed:
                                 logging.info("[feed_preload] extruder[%d], motor speed error, motor_speed:%d",

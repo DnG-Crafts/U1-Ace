@@ -1,4 +1,3 @@
-#Version 3
 # https://github.com/DnG-Crafts/U1-Ace
 import serial, threading, time, logging, json, struct, queue, traceback, glob, copy, random
 from datetime import datetime
