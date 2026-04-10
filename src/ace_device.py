@@ -25,6 +25,7 @@ class AceDevice:
         self.max_dryer_temp = config.getint('max_dryer_temperature', 55)
         self.enable_feed_assist = config.getboolean('enable_feed_assist', True)
         self.enable_feeder_mode = config.getboolean('enable_feeder_mode', False)
+        self.disable_u1_rfid = config.getboolean('disable_u1_rfid', False)
 
         
         self.feed_lengths = [
@@ -89,6 +90,9 @@ class AceDevice:
 
     def feed_assist(self):
         return self.enable_feed_assist
+
+    def disable_rfid(self):
+        return self.disable_u1_rfid
 
     def _handle_start_print_job(self):
         logging.info("ACE: Print job started.")
@@ -332,11 +336,11 @@ class AceDevice:
                                 
                             elif actual_stage == "load_feeding":
                                 logging.info("ACE: [SERIAL] -> LOAD_SLOT=%d", idx)
-                                if self.enable_feed_assist:
+                                if self.enable_feed_assist and self.enable_feeder_mode:
                                     self.send_request(request = {"method": "start_feed_assist", "params": {"index": idx}}, callback = None)
                                 else:
                                     if not self.get_sensor_state(idx, eventtime):
-                                        self.send_request(request = {"method": "feed_filament", "params": {"index": idx, "length": 3000, "speed": 50}}, callback = None)
+                                        self.send_request(request = {"method": "feed_filament", "params": {"index": idx, "length": 3000, "speed": 60}}, callback = None)
                                         self._feed_start_times[idx] = eventtime
                                         self._active_feeds.add(idx) 
                                     else:
@@ -345,7 +349,7 @@ class AceDevice:
                                 
                             elif actual_stage == "load_fail":
                                 logging.info("ACE: [SERIAL] -> FAILED_SLOT=%d", idx)
-                                if self.enable_feed_assist:
+                                if self.enable_feed_assist and self.enable_feeder_mode:
                                     self.send_request(request = {"method": "stop_feed_assist", "params": {"index": idx}}, callback = None)
                                 else:
                                     self.send_request(request = {"method": "stop_feed_filament", "params": {"index": idx}}, callback = None)
@@ -355,7 +359,7 @@ class AceDevice:
                                 
                             elif actual_stage == "load_finish":
                                 logging.info("ACE: [SERIAL] -> LOAD_COMPLETE_SLOT=%d", idx)
-                                if self.enable_feed_assist:
+                                if self.enable_feed_assist and self.enable_feeder_mode:
                                     self.send_request(request = {"method": "stop_feed_assist", "params": {"index": idx}}, callback = None)
                                 else:
                                     self.send_request(request = {"method": "stop_feed_filament", "params": {"index": idx}}, callback = None)
@@ -404,9 +408,13 @@ class AceDevice:
             if self.auto_feed_step[i] == 0:
                 prev_status = self._last_filament_status[i]
                 if prev_status == 'preload' and current_status == 'ready':
-                    logging.info("ACE: Slot %d trigger. Entering Incremental Feed" % i)
-                    self.auto_feed_step[i] = 1
-                    self.feed_sent[i] = False
+                    if not self.enable_feeder_mode:
+                        self.auto_feed_step[i] = 2
+                        self.feed_sent[i] = True
+                    else:
+                        logging.info("ACE: Slot %d trigger. Entering Incremental Feed" % i)
+                        self.auto_feed_step[i] = 1
+                        self.feed_sent[i] = False
 
             elif self.auto_feed_step[i] == 1:
                 if self.port_sensor_hit[i]:
@@ -609,7 +617,7 @@ class AceDevice:
         def callback(self, response):
             if 'code' in response and response['code'] != 0:
                 raise gcmd.error("ACE Error: " + response['msg'])
-            self.gcode.respond_info('Started ACE drying')
+            self.gcode.respond_info('Started ACE drying at %d°C for %d minutes' % (temperature, duration))
         self.send_request(request = {"method": "drying", "params": {"temp":temperature, "fan_speed": 7000, "duration": duration}}, callback = callback)
 
 
