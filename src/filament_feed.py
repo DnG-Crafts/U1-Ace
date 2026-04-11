@@ -893,39 +893,46 @@ class FilamentFeed:
                                 self.channel_error[ch] = FEED_OK
                                 break
                             
-                            preload_min_speed = FEED_PRELOAD_MOTOR_MIN_SPEED                            
-                            if self.ace_device is not None:    
-                                preload_min_speed = 10
-
-                            if motor_speed < preload_min_speed:
-                                logging.info("[feed_preload] extruder[%d], motor speed error, motor_speed:%d",
-                                             self.filament_ch[ch], motor_speed)
-                                if motor_speed_err_max > 0:
-                                    motor_speed_err_max -= 1
-                                else:
-                                    self.channel_error[ch] = FEED_ERR_MOTOR_SPEED
-                                    self.exception_code[ch] = 11
-                                    break
-                            else:
-                                motor_speed_err_max = FEED_PRELOAD_MOTOR_ERR_CNT_MAX
-                            if wheel_speed_a * FEED_MOTOR_REDUCTION_R < motor_speed * (1 - FEED_MOTOR_SLIP_RATE) and \
-                                wheel_speed_b * FEED_MOTOR_REDUCTION_R < motor_speed * (1 - FEED_MOTOR_SLIP_RATE):
-                                logging.info("[feed_preload] extruder[%d], wheel speed error, wheel_speed_a:%d, wheel_speed_b:%d, motor_speed:%d",
-                                             self.filament_ch[ch], wheel_speed_a, wheel_speed_b, motor_speed)
-                                if wheel_speed_err_max > 0:
-                                    wheel_speed_err_max -= 1
-                                else:
-                                    self.channel_error[ch] = FEED_ERR_WHEEL_SPEED
-                                    self.exception_code[ch] = 12
-                                    break
-                            else:
-                                wheel_speed_err_max = FEED_PRELOAD_WHEEL_ERR_CNT_MAX
+                            
+                            #preload_min_speed = FEED_PRELOAD_MOTOR_MIN_SPEED                            
+ 
+                            #if motor_speed < preload_min_speed:
+                                #logging.info("[feed_preload] extruder[%d], motor speed error, motor_speed:%d",self.filament_ch[ch], motor_speed)
+                                #if motor_speed_err_max > 0:
+                                    #motor_speed_err_max -= 1
+                                #else:
+                                    #self.channel_error[ch] = FEED_ERR_MOTOR_SPEED
+                                    #self.exception_code[ch] = 11
+                                    #break
+                            #else:
+                                #motor_speed_err_max = FEED_PRELOAD_MOTOR_ERR_CNT_MAX
+                                
+                                
+                                
+                                
+                            #if wheel_speed_a * FEED_MOTOR_REDUCTION_R < motor_speed * (1 - FEED_MOTOR_SLIP_RATE) and \
+                                #wheel_speed_b * FEED_MOTOR_REDUCTION_R < motor_speed * (1 - FEED_MOTOR_SLIP_RATE):
+                                #logging.info("[feed_preload] extruder[%d], wheel speed error, wheel_speed_a:%d, wheel_speed_b:%d, motor_speed:%d",self.filament_ch[ch], wheel_speed_a, wheel_speed_b, motor_speed)
+                                #if wheel_speed_err_max > 0:
+                                    #wheel_speed_err_max -= 1
+                                #else:
+                                    #self.channel_error[ch] = FEED_ERR_WHEEL_SPEED
+                                    #self.exception_code[ch] = 12
+                                    #break
+                            #else:
+                                #wheel_speed_err_max = FEED_PRELOAD_WHEEL_ERR_CNT_MAX
+                                
+                                
+                                
                             if systime_2 - systime_1 > FEED_PRELOAD_TIMEOUT_TIME:
                                 self.channel_error[ch] = FEED_ERR_TIMEOUT
                                 self.exception_code[ch] = 14
                                 break
 
+
+
                             self.reactor.pause(self.reactor.monotonic() + 0.05)
+
 
                     self.motor.run(FEED_MOTOR_DIR_IDLE, 0)
                     wheel_cnt_a_2 = self.wheel[ch].get_counts()

@@ -114,9 +114,6 @@ class FilamentEntangleDetect:
         else:
             self.detection_length = ENTANGLE_DETECT_LENGTH_DEFAULT
             
-        if self.ace_device is not None and self.ace_device.feed_assist():
-            self.detection_length = ENTANGLE_DETECT_LENGTH_DEFAULT_TPU_85
-            
         self.last_position = self._get_extruder_pos()
         self.skip_length_remained = self.skip_length
         self.last_wheel_counts = self.filament_feed_module.wheel[self.filament_feed_channel].get_counts()
@@ -172,7 +169,10 @@ class FilamentEntangleDetect:
     def _check_entangle_event(self, eventtime):
         if self._need_to_check_entanglement() == False:
             return self.reactor.monotonic() + CHECK_ENTANGLE_INTERVAL
-
+            
+        if self.ace_device is not None and self.ace_device.feed_assist():
+            return self.reactor.monotonic() + CHECK_ENTANGLE_INTERVAL
+        
         new_position = self._get_extruder_pos()
         new_wheel_counts = self.filament_feed_module.wheel[self.filament_feed_channel].get_counts()
         new_wheel_2_counts = self.filament_feed_module.wheel_2[self.filament_feed_channel].get_counts()
