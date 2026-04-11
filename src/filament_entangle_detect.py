@@ -170,7 +170,7 @@ class FilamentEntangleDetect:
         if self._need_to_check_entanglement() == False:
             return self.reactor.monotonic() + CHECK_ENTANGLE_INTERVAL
             
-        if self.ace_device is not None and self.ace_device.feed_assist():
+        if self.ace_device is not None:
             return self.reactor.monotonic() + CHECK_ENTANGLE_INTERVAL
         
         new_position = self._get_extruder_pos()
