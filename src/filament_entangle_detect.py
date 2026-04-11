@@ -283,4 +283,3 @@ class FilamentEntangleDetect:
 
 def load_config_prefix(config):
     return FilamentEntangleDetect(config)
-
