@@ -271,7 +271,7 @@ class AceDevice:
 
 
 
-        if not self.enable_feed_assist:
+        if not self.enable_feed_assist or not self.enable_feeder_mode:
             feeds_to_remove = []
             for idx in self._active_feeds:
                 if self.get_sensor_state(idx, eventtime):
