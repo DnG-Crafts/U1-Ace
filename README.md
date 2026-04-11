@@ -84,6 +84,13 @@ enable_feed_assist: True
 
 
 
+# disable u1 rfid reader, setting this to True will disable the internal rfid reader of the printer
+# this will stop the printer detecting spools on the sides of the printer while loading with ace.
+
+disable_u1_rfid: False
+
+
+
 # max temp for dryer
 
 max_dryer_temperature: 55
