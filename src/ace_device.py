@@ -1,5 +1,5 @@
 # https://github.com/DnG-Crafts/U1-Ace
-import serial, threading, time, logging, json, struct, queue, traceback, glob, copy, random
+import serial, threading, time, logging, json, struct, queue, traceback, glob, copy, random, configparser
 from datetime import datetime
 from . import filament_protocol
 
@@ -26,6 +26,8 @@ class AceDevice:
         self.enable_feed_assist = config.getboolean('enable_feed_assist', True)
         self.enable_feeder_mode = config.getboolean('enable_feeder_mode', False)
         self.disable_u1_rfid = config.getboolean('disable_u1_rfid', False)
+        self.force_generic = config.getboolean('force_generic', False)
+        
 
         
         self.feed_lengths = [
@@ -93,6 +95,20 @@ class AceDevice:
 
     def disable_rfid(self):
         return self.disable_u1_rfid
+
+
+    def check_rfid_status():
+        config = configparser.ConfigParser()
+        try:
+            config.read('/oem/printer_data/config/extended/extended2.cfg')
+            rfid_value = config.get('components', 'rfid', fallback=None)
+            if rfid_value == "openrfid-generic":
+                return True
+            else:
+                return False
+        except Exception:
+            return False
+
 
     def _handle_start_print_job(self):
         logging.info("ACE: Print job started.")
@@ -554,8 +570,12 @@ class AceDevice:
                 total_len = s.get('total')
                 info = copy.deepcopy(filament_protocol.FILAMENT_INFO_STRUCT)
                 info['VERSION'] = 1
-                info['VENDOR'] = sku
-                info['MANUFACTURER'] = sku
+                if self.force_generic or self.check_rfid_status():
+                    info['VENDOR'] = sku if sku == "Snapmaker" else "Generic"
+                    info['MANUFACTURER'] = sku if sku == "Snapmaker" else "Generic"
+                else:
+                    info['VENDOR'] = sku
+                    info['MANUFACTURER'] = sku
                 info['MAIN_TYPE'] = f_type
                 info['SUB_TYPE'] = brand
                 info['COLOR_NUMS'] = 1

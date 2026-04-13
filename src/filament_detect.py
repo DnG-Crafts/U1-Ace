@@ -123,7 +123,7 @@ class FilamentDetector:
         if channel < 0 or channel >= self._channel_nums:
             return
 
-        if self.ace_device is not None and self.ace_device.disable_u1_rfid():
+        if self.ace_device is not None and self.ace_device.disable_rfid():
             return
 
         if (fm175xx_reader.FM175XX_CARD_INFO_READ == operation):
