@@ -140,7 +140,7 @@ retract_length_slot4: 100
 
 # Filament Dryer
 
-The filament dryer can be enabled or disabled from the fluidd or mainsail web ui using the following gcode commands.
+The filament dryer can be enabled or disabled from the fluidd or mainsail web ui using macros in the macro list or by using the following gcode commands in the console.
 
 
 Starts the dryer for 240 minutes at 55 degrees celsius.
