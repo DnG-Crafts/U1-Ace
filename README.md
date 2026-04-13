@@ -91,6 +91,13 @@ disable_u1_rfid: False
 
 
 
+# force generic vendor for all spools detected by rfid.
+# this allows the filament to be selected in snapmaker orca with default generic filaments.
+
+force_generic: False
+
+
+
 # max temp for dryer
 
 max_dryer_temperature: 55
@@ -128,7 +135,6 @@ retract_length_slot1: 100
 retract_length_slot2: 100
 retract_length_slot3: 100
 retract_length_slot4: 100
-
 ```
 <br><br>
 
