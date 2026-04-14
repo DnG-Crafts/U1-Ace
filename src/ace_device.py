@@ -97,7 +97,7 @@ class AceDevice:
         return self.disable_u1_rfid
 
 
-    def check_rfid_status():
+    def check_rfid_status(self):
         config = configparser.ConfigParser()
         try:
             config.read('/oem/printer_data/config/extended/extended2.cfg')
