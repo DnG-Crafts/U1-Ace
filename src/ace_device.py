@@ -556,6 +556,14 @@ class AceDevice:
             alpha = colors_raw[0][3] if colors_raw and len(colors_raw[0]) > 3 else 255
             alpha_hex = "%02X" % alpha
             filament_detect = self.printer.lookup_object('filament_detect', None)
+            
+            if self.force_generic or self.check_rfid_status():
+                if sku.lower() != "snapmaker":
+                    sku = "Generic"
+
+            if sku.lower() != "snapmaker" and brand.lower() == "basic":
+                brand = ""
+
             if filament_detect is None:
                 command = (
                     f"SET_PRINT_FILAMENT_CONFIG "
@@ -570,12 +578,8 @@ class AceDevice:
                 total_len = s.get('total')
                 info = copy.deepcopy(filament_protocol.FILAMENT_INFO_STRUCT)
                 info['VERSION'] = 1
-                if self.force_generic or self.check_rfid_status():
-                    info['VENDOR'] = sku if sku == "Snapmaker" else "Generic"
-                    info['MANUFACTURER'] = sku if sku == "Snapmaker" else "Generic"
-                else:
-                    info['VENDOR'] = sku
-                    info['MANUFACTURER'] = sku
+                info['VENDOR'] = sku
+                info['MANUFACTURER'] = sku
                 info['MAIN_TYPE'] = f_type
                 info['SUB_TYPE'] = brand
                 info['COLOR_NUMS'] = 1
@@ -658,7 +662,7 @@ class AceDevice:
         subtype = gcmd.get('SUBTYPE', '')
         color = gcmd.get('COLOR', '000000')
         alpha = gcmd.get('ALPHA', 'FF')
-        official = gcmd.get('OFFICIAL', False)
+        official = gcmd.get('OFFICIAL', 'false').lower()
         length = gcmd.get_int('LENGTH', 330)
         diameter = gcmd.get_int('DIAMETER', 175)
         weight = gcmd.get_int('WEIGHT', 1000)
@@ -667,6 +671,13 @@ class AceDevice:
         hotbed_temp_min = gcmd.get_int('BED_TEMP_MIN', 50)
         hotbed_temp_max = gcmd.get_int('BED_TEMP_MAX', 60)
         
+        if self.force_generic or self.check_rfid_status():
+            if vendor.lower() != "snapmaker":
+                vendor = "Generic"
+        
+        if vendor.lower() != "snapmaker" and subtype.lower() == "basic":
+            subtype = ""
+
         if channel < 0 or channel >= 4:
             raise gcmd.error("ACE channel{} is out of range[0, 3]".format(channel))
  
@@ -691,7 +702,7 @@ class AceDevice:
             info['RGB_1'] = int(color, 16)
             info['ALPHA'] = int(alpha, 16)
             info['ARGB_COLOR'] = (int(alpha, 16) << 24) | int(color, 16)
-            info['OFFICIAL'] = official
+            info['OFFICIAL'] = official in ['true', '1', 'yes']
             info['LENGTH'] = length
             info['DIAMETER'] = diameter
             info['WEIGHT'] = weight
