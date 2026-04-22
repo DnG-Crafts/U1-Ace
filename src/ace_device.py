@@ -556,7 +556,13 @@ class AceDevice:
             alpha = colors_raw[0][3] if colors_raw and len(colors_raw[0]) > 3 else 255
             alpha_hex = "%02X" % alpha
             filament_detect = self.printer.lookup_object('filament_detect', None)
-            
+
+            if brand.lower() == "ac":
+                filament_info = f_type.split(" ", 1)
+                f_type = filament_info[0]
+                brand = filament_info[1] if len(filament_info) > 1 else ""
+                sku = "Anycubic"
+
             if self.force_generic or self.check_rfid_status():
                 if sku.lower() != "snapmaker":
                     sku = "Generic"
