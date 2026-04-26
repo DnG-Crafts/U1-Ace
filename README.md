@@ -156,19 +156,37 @@ ACE_STOP_DRYING
 
 <br><br>
 
-# Cable and Extruder Setup
 
-[![https://www.youtube.com/watch?v=NxCtS9ZYoLk](https://img.youtube.com/vi/NxCtS9ZYoLk/0.jpg)](https://www.youtube.com/watch?v=NxCtS9ZYoLk)
+# Cable Setup
 
-https://www.youtube.com/watch?v=NxCtS9ZYoLk<br>
+[![https://www.youtube.com/watch?v=DQsblPD1qpk](https://img.youtube.com/vi/DQsblPD1qpk/0.jpg)](https://www.youtube.com/watch?v=DQsblPD1qpk)
+
+https://www.youtube.com/watch?v=DQsblPD1qpk<br>
 
 <br><br>
+
 
 ### Ace Pinout
 
 <img src=https://github.com/DnG-Crafts/U1-Ace/blob/main/images/ACE_PORT.jpg width=50% height=50%>
 
 <br><br>
+
+
+# Feeder Setup
+
+If you wish to use the side feeders then this is how you set them up.
+
+[![https://www.youtube.com/watch?v=H58NYWm1mIg](https://img.youtube.com/vi/H58NYWm1mIg/0.jpg)](https://www.youtube.com/watch?v=H58NYWm1mIg)
+
+https://www.youtube.com/watch?v=H58NYWm1mIg<br>
+
+<br>
+
+<a href=https://github.com/DnG-Crafts/U1-Ace/tree/main/Ace%20Feeder%20Covers>Feeder Covers</a>
+
+<br><br>
+
 
 ## Thankyou
 
