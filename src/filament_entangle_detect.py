@@ -2,7 +2,7 @@ import logging, os
 from . import print_task_config
 
 CHECK_ENTANGLE_INTERVAL                     = 0.1
-ENTANGLE_DETECT_LENGTH_DEFAULT              = 6.0
+ENTANGLE_DETECT_LENGTH_DEFAULT              = 60.0
 ENTANGLE_DETECT_LENGTH_DEFAULT_SOFT         = 120.0
 ENTANGLE_DETECT_LENGTH_DEFAULT_TPU_85       = 180.0
 ENTANGLE_DETECT_LENGTH_DEFAULT_TPU_90       = 120.0
@@ -170,7 +170,7 @@ class FilamentEntangleDetect:
         if self._need_to_check_entanglement() == False:
             return self.reactor.monotonic() + CHECK_ENTANGLE_INTERVAL
             
-        if self.ace_device is not None:
+        if self.ace_device is not None and self.ace_device.disable_ap():
             return self.reactor.monotonic() + CHECK_ENTANGLE_INTERVAL
         
         new_position = self._get_extruder_pos()

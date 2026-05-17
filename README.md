@@ -12,7 +12,7 @@ https://www.youtube.com/watch?v=sk9fGzlz-C4<br>
 
 # Extended Firmware
 
-To use this you must install this version of the <a href=https://github.com/DnG-Crafts/SnapmakerU1-Extended-Firmware/releases>extended firmware</a><br>
+To use this you must install this version of the <a href=https://github.com/DnG-Crafts/U1-Ace/releases>extended firmware</a><br>
 The original version provided by <a href=https://github.com/paxx12>paxx12</a> does not have the edits required to run this script.<br>
 
 The extended firmware adds many features and fixes which you can read about <a href=https://snapmakeru1-extended-firmware.pages.dev/>HERE</a>
