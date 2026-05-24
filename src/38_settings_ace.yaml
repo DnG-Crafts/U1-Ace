@@ -1,0 +1,350 @@
+settings:
+  ace_mod:
+    items:
+      ace:
+        label: Ace Mod
+        help_url: https://github.com/DnG-Crafts/U1-Ace
+        description: Enable U1 Ace Mod.
+        get_cmd:
+          - /usr/local/bin/extended-config.py
+          - get
+          - /home/lava/printer_data/config/extended/extended2.cfg
+          - ace_mod
+          - ace
+          - "false"
+        options:
+          "true":
+            label: Enabled
+            cmd:
+              - bash
+              - -c
+              - |
+                /usr/local/bin/extended-config.py add /oem/printer_data/config/extended/extended2.cfg ace_mod ace true
+                cp /usr/local/share/ace_device/ace_device.cfg /oem/printer_data/config/extended/mods/ace_device.cfg
+                chmod 777 /oem/printer_data/config/extended/mods/ace_device.cfg
+                echo -e 'Ace Mod: enabled\n\nRestarting system...'
+                reboot  
+          "false":
+            label: Disabled
+            cmd:
+
+              - bash
+              - -c
+              - |
+                /usr/local/bin/extended-config.py add /oem/printer_data/config/extended/extended2.cfg ace_mod ace false
+                /usr/local/bin/extended-config.py add /oem/printer_data/config/extended/extended2.cfg ace_mod ace_feeder false
+                /usr/local/bin/extended-config.py add /oem/printer_data/config/extended/extended2.cfg ace_mod ace_assist true
+                /usr/local/bin/extended-config.py add /oem/printer_data/config/extended/extended2.cfg ace_mod ace_rfid true
+                /usr/local/bin/extended-config.py add /oem/printer_data/config/extended/extended2.cfg ace_mod ace_version auto
+                rm /oem/printer_data/config/extended/mods/ace_device.cfg
+                echo -e 'Ace Mod: disabled\nSettings reset to default\n\nRestarting system...'
+                reboot
+        default: "false"
+
+      ace_version:
+        label: ACE Version
+        help_url: https://github.com/DnG-Crafts/U1-Ace/blob/main/src/ace_device.cfg#L10
+        description: Select which ACE MMU protocol to use. Auto detects ACE 1 Pro or ACE 2 Pro from the USB serial id.
+        get_cmd:
+          - /usr/local/bin/extended-config.py
+          - get
+          - /home/lava/printer_data/config/extended/extended2.cfg
+          - ace_mod
+          - ace_version
+          - "auto"
+        options:
+          "auto":
+            label: Auto Detect
+            cmd:
+              - bash
+              - -c
+              - |
+                if [ -f '/oem/printer_data/config/extended/mods/ace_device.cfg' ]; then
+                  /usr/local/bin/extended-config.py add /oem/printer_data/config/extended/extended2.cfg ace_mod ace_version auto
+                  sed -i 's/^device_version:.*/device_version: auto/' /oem/printer_data/config/extended/mods/ace_device.cfg
+                  echo -e 'ACE Version: auto detect\n\nRestarting klipper...'
+                  /etc/init.d/S60klipper restart
+                else
+                  echo -e 'Error: Enable Ace Mod first'
+                fi
+          "ace1":
+            label: ACE 1 Pro
+            cmd:
+              - bash
+              - -c
+              - |
+                if [ -f '/oem/printer_data/config/extended/mods/ace_device.cfg' ]; then
+                  /usr/local/bin/extended-config.py add /oem/printer_data/config/extended/extended2.cfg ace_mod ace_version ace1
+                  sed -i 's/^device_version:.*/device_version: ace1/' /oem/printer_data/config/extended/mods/ace_device.cfg
+                  echo -e 'ACE Version: ACE 1 Pro\n\nRestarting klipper...'
+                  /etc/init.d/S60klipper restart
+                else
+                  echo -e 'Error: Enable Ace Mod first'
+                fi
+          "ace2":
+            label: ACE 2 Pro
+            cmd:
+              - bash
+              - -c
+              - |
+                if [ -f '/oem/printer_data/config/extended/mods/ace_device.cfg' ]; then
+                  /usr/local/bin/extended-config.py add /oem/printer_data/config/extended/extended2.cfg ace_mod ace_version ace2
+                  sed -i 's/^device_version:.*/device_version: ace2/' /oem/printer_data/config/extended/mods/ace_device.cfg
+                  echo -e 'ACE Version: ACE 2 Pro\n\nRestarting klipper...'
+                  /etc/init.d/S60klipper restart
+                else
+                  echo -e 'Error: Enable Ace Mod first'
+                fi
+        default: "auto"
+
+      ace_feeder:
+        label: Feeder Mode
+        help_url: https://github.com/DnG-Crafts/U1-Ace/blob/main/src/ace_device.cfg#L18
+        description: Feeder Mode allows you to use the U1 side feeders with the ACE.
+        get_cmd:
+          - /usr/local/bin/extended-config.py
+          - get
+          - /home/lava/printer_data/config/extended/extended2.cfg
+          - ace_mod
+          - ace_feeder
+          - "false"
+        options:
+          "true":
+            label: Enabled
+            cmd:
+              - bash
+              - -c
+              - |
+                if [ -f '/oem/printer_data/config/extended/mods/ace_device.cfg' ]; then
+                  /usr/local/bin/extended-config.py add /oem/printer_data/config/extended/extended2.cfg ace_mod ace_feeder true
+                  sed -i 's/enable_feeder_mode: False/enable_feeder_mode: True/' /oem/printer_data/config/extended/mods/ace_device.cfg
+                  echo -e 'Feeder Mode: enabled\n\nRestarting system...'
+                  reboot
+                else
+                  echo -e 'Error: Enable Ace Mod first'
+                fi
+          "false":
+            label: Disabled
+            cmd:
+              - bash
+              - -c
+              - |
+                if [ -f '/oem/printer_data/config/extended/mods/ace_device.cfg' ]; then
+                  /usr/local/bin/extended-config.py add /oem/printer_data/config/extended/extended2.cfg ace_mod ace_feeder false
+                  sed -i 's/enable_feeder_mode: True/enable_feeder_mode: False/' /oem/printer_data/config/extended/mods/ace_device.cfg
+                  echo -e 'Feeder Mode: disabled\n\nRestarting system...'
+                  reboot
+                else
+                  echo -e 'Error: Enable Ace Mod first'
+                fi 
+        default: "false"
+        
+      ace_assist:
+        label: Feed Assist
+        help_url: https://github.com/DnG-Crafts/U1-Ace/blob/main/src/ace_device.cfg#L27
+        description: Feed Assist makes the ACE unit feed the filament while printing.
+        get_cmd:
+          - /usr/local/bin/extended-config.py
+          - get
+          - /home/lava/printer_data/config/extended/extended2.cfg
+          - ace_mod
+          - ace_assist
+          - "true"
+        options:
+          "true":
+            label: Enabled
+            cmd:
+              - bash
+              - -c
+              - |
+                if [ -f '/oem/printer_data/config/extended/mods/ace_device.cfg' ]; then
+                  /usr/local/bin/extended-config.py add /oem/printer_data/config/extended/extended2.cfg ace_mod ace_assist true
+                  sed -i 's/enable_feed_assist: False/enable_feed_assist: True/' /oem/printer_data/config/extended/mods/ace_device.cfg
+                  echo -e 'Feed Assist: enabled\n\nRestarting klipper...'
+                  /etc/init.d/S60klipper restart
+                else
+                  echo -e 'Error: Enable Ace Mod first'
+                fi
+          "false":
+            label: Disabled
+            cmd:
+              - bash
+              - -c
+              - |
+                if [ -f '/oem/printer_data/config/extended/mods/ace_device.cfg' ]; then
+                  /usr/local/bin/extended-config.py add /oem/printer_data/config/extended/extended2.cfg ace_mod ace_assist false
+                  sed -i 's/enable_feed_assist: True/enable_feed_assist: False/' /oem/printer_data/config/extended/mods/ace_device.cfg
+                  echo -e 'Feed Assist: disabled\n\nRestarting klipper...'
+                  /etc/init.d/S60klipper restart
+                else
+                  echo -e 'Error: Enable Ace Mod first'
+                fi
+        default: "true"
+
+      ace_generic:
+        label: Force Generic
+        help_url: https://github.com/DnG-Crafts/U1-Ace/blob/main/src/ace_device.cfg#L40
+        description: Force generic vendor for all spools detected by ace rfid.
+        get_cmd:
+          - /usr/local/bin/extended-config.py
+          - get
+          - /home/lava/printer_data/config/extended/extended2.cfg
+          - ace_mod
+          - ace_generic
+          - "false"
+        options:
+          "true":
+            label: Enabled
+            cmd:
+              - bash
+              - -c
+              - |
+                if [ -f '/oem/printer_data/config/extended/mods/ace_device.cfg' ]; then
+                  /usr/local/bin/extended-config.py add /oem/printer_data/config/extended/extended2.cfg ace_mod ace_generic true
+                  sed -i 's/force_generic: False/force_generic: True/' /oem/printer_data/config/extended/mods/ace_device.cfg
+                  echo -e 'Force Generic: enabled\n\nRestarting klipper...'
+                  /etc/init.d/S60klipper restart
+                else
+                  echo -e 'Error: Enable Ace Mod first'
+                fi
+          "false":
+            label: Disabled
+            cmd:
+              - bash
+              - -c
+              - |
+                if [ -f '/oem/printer_data/config/extended/mods/ace_device.cfg' ]; then
+                  /usr/local/bin/extended-config.py add /oem/printer_data/config/extended/extended2.cfg ace_mod ace_generic false
+                  sed -i 's/force_generic: True/force_generic: False/' /oem/printer_data/config/extended/mods/ace_device.cfg
+                  echo -e 'Force Generic: disabled\n\nRestarting klipper...'
+                  /etc/init.d/S60klipper restart
+                else
+                  echo -e 'Error: Enable Ace Mod first'
+                fi
+        default: "true"
+
+      ace_rfid:
+        label: U1 RFID
+        help_url: https://github.com/DnG-Crafts/U1-Ace/blob/main/src/ace_device.cfg#L33
+        description: Enable or disable the U1 RFID readers on the sides of the printer.
+        get_cmd:
+          - /usr/local/bin/extended-config.py
+          - get
+          - /home/lava/printer_data/config/extended/extended2.cfg
+          - ace_mod
+          - ace_rfid
+          - "true"
+        options:
+          "true":
+            label: Enabled
+            cmd:
+              - bash
+              - -c
+              - |
+                if [ -f '/oem/printer_data/config/extended/mods/ace_device.cfg' ]; then
+                  /usr/local/bin/extended-config.py add /oem/printer_data/config/extended/extended2.cfg ace_mod ace_rfid true
+                  sed -i 's/disable_u1_rfid: True/disable_u1_rfid: False/' /oem/printer_data/config/extended/mods/ace_device.cfg
+                  echo -e 'U1 RFID: enabled\n\nRestarting klipper...'
+                  /etc/init.d/S60klipper restart
+                else
+                  echo -e 'Error: Enable Ace Mod first'
+                fi
+          "false":
+            label: Disabled
+            cmd:
+              - bash
+              - -c
+              - |
+                if [ -f '/oem/printer_data/config/extended/mods/ace_device.cfg' ]; then
+                  /usr/local/bin/extended-config.py add /oem/printer_data/config/extended/extended2.cfg ace_mod ace_rfid false
+                  sed -i 's/disable_u1_rfid: False/disable_u1_rfid: True/' /oem/printer_data/config/extended/mods/ace_device.cfg
+                  echo -e 'U1 RFID: disabled\n\nRestarting klipper...'
+                  /etc/init.d/S60klipper restart
+                else
+                  echo -e 'Error: Enable Ace Mod first'
+                fi
+        default: "true"
+
+      update_ace:
+        label: Updater 
+        description: Update Ace Mod.
+        get_cmd: ["echo", "idle"]
+        options:
+          "idle": {label: "Update?"}
+          "run":
+            label: Update Now
+            confirm: "Check version and update if a new version is found."
+            cmd:
+              - bash
+              - -c
+              - |
+                CURL="/usr/local/bin/curl -sSL -f"
+                BASE_URL="https://raw.githubusercontent.com/DnG-Crafts/U1-Ace/refs/heads/main/src"
+                DESTDIR="/oem/printer_data/ace_device"
+                
+                LOCAL_V_FILE="$DESTDIR/version"
+                REMOTE_V_TMP="/tmp/version.remote"
+                
+                VERSION_TRACKER="$DESTDIR/version.local"
+                PATCH_DEST="$DESTDIR/patch.list"
+                TMP_LIST="/tmp/patch.list"
+                
+                UPDATED=0
+                mkdir -p "$DESTDIR"
+
+                echo "Checking for update..."
+                if ! $CURL -o "$REMOTE_V_TMP" "$BASE_URL/version"; then
+                  echo "Error: Cannot reach update server to check version."
+                  exit 1
+                fi
+
+                REMOTE_V=$(cat "$REMOTE_V_TMP" | tr -d '\r' | xargs)
+                [ -f "$LOCAL_V_FILE" ] && LOCAL_V=$(cat "$LOCAL_V_FILE" | tr -d '\r' | xargs)
+                LOCAL_V=${LOCAL_V:-0}
+
+                if [ "$REMOTE_V" -gt "$LOCAL_V" ]; then
+                  echo "New version detected: v$REMOTE_V (Local: v$LOCAL_V)"
+                  
+                  if ! $CURL -o "$TMP_LIST" "$BASE_URL/patch.list"; then
+                    echo "Error: Could not download patch.list"
+                    exit 1
+                  fi
+
+                  TMP_VERSION_LOCAL="/tmp/version.local.tmp"
+                  > "$TMP_VERSION_LOCAL"
+
+                  while IFS=',' read -r filename remote_ver target_dir || [ -n "$filename" ]; do
+                    filename=$(echo "$filename" | tr -d '\r' | xargs)
+                    remote_ver=$(echo "$remote_ver" | tr -d '\r' | xargs)
+                    target_dir=$(echo "$target_dir" | tr -d '\r' | xargs)
+                    [ -z "$filename" ] || [ -z "$remote_ver" ] || [ -z "$target_dir" ] && continue
+
+                    current_f_ver=0
+                    if [ -f "$VERSION_TRACKER" ]; then
+                      current_f_ver=$(grep "^$filename," "$VERSION_TRACKER" | cut -d',' -f2)
+                      current_f_ver=${current_f_ver:-0}
+                    fi
+
+                    if [ ! -f "$DESTDIR/$filename" ] || [ "$remote_ver" -gt "$current_f_ver" ]; then
+                      echo "Updating $filename to v$remote_ver..."
+                      TMP_FILE="/tmp/$filename"
+                      if $CURL -o "$TMP_FILE" "$BASE_URL/$filename"; then
+                        mv "$TMP_FILE" "$DESTDIR/$filename"
+                        UPDATED=1
+                      fi
+                    fi
+
+                    echo "$filename,$remote_ver,$target_dir" >> "$TMP_VERSION_LOCAL"
+                  done < "$TMP_LIST"
+
+                  mv "$REMOTE_V_TMP" "$LOCAL_V_FILE"
+                  mv "$TMP_LIST" "$PATCH_DEST"
+                  mv "$TMP_VERSION_LOCAL" "$VERSION_TRACKER"
+
+                  echo -e "\nUpdate to v$REMOTE_V successful. Syncing and rebooting..."
+                  sync
+                  reboot
+                else
+                  echo "System is up to date (v$LOCAL_V)."
+                fi
+        default: "idle"

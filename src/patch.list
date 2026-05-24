@@ -1,4 +1,5 @@
 ace_device.py,5,/home/lava/klipper/klippy/extras
+ace2_protocol.py,1,/home/lava/klipper/klippy/extras
 filament_detect.py,2,/home/lava/klipper/klippy/extras
 filament_entangle_detect.py,2,/home/lava/klipper/klippy/extras
 filament_feed.py,2,/home/lava/klipper/klippy/extras

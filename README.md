@@ -1,5 +1,11 @@
 # U1 Ace
-Adding the Anycubic ACE to the U1 printer
+Adding the Anycubic ACE to the U1 printer.
+
+Both **ACE 1 Pro** (JSON-over-serial, 115200 baud) and **ACE 2 Pro**
+(protobuf-over-serial, 230400 baud) MMUs are supported. The driver
+auto-detects which one is plugged in from the USB serial id. If you
+want to pin it explicitly, set `device_version: ace1` or
+`device_version: ace2` in `ace_device.cfg`.
 
 
 <br><br>
@@ -55,7 +61,18 @@ These are the default config values found in `/extended/mods/ace_device.cfg`, yo
 [ace_device]
 
 
-# these are the serial connection options and should not need to be modified
+# device_version selects which MMU protocol to speak.
+#   auto  - detect ACE 1 Pro or ACE 2 Pro from /dev/serial/by-id (default)
+#   ace1  - force ACE 1 Pro (JSON-over-serial, 115200 baud)
+#   ace2  - force ACE 2 Pro (protobuf-over-serial, 230400 baud)
+
+device_version: auto
+
+
+# these are the serial connection options and should not need to be modified.
+# when device_version is auto, the serial path is overridden by whatever
+# ACE device is plugged in. baud is auto-upgraded to 230400 when an
+# ACE 2 Pro is detected and baud was left at the ACE 1 default.
 
 serial: /dev/serial/by-id/usb-ANYCUBIC_ACE_1-if00
 baud: 115200
@@ -127,14 +144,16 @@ load_length_slot4: 850
 
 
 # the retract length is how far the ace retracts the filament when you
-# unload the filament from the u1 touch screen menu
-# if you do not like the loose filament on the spool set these values to 100 which
-# is enough to clear the extruder but should not cause the loose filament issue shown in the video
+# unload the filament from the u1 touch screen menu. one single long
+# rollback is issued; the retract is treated as finished as soon as the
+# slot's status flips to empty or ready. 3000 mm (3 m) covers a long
+# PTFE tube in one shot with margin -- set lower if you want a tighter
+# bound or to leave more filament near the buffer.
 
-retract_length_slot1: 100
-retract_length_slot2: 100
-retract_length_slot3: 100
-retract_length_slot4: 100
+retract_length_slot1: 3000
+retract_length_slot2: 3000
+retract_length_slot3: 3000
+retract_length_slot4: 3000
 ```
 <br><br>
 
