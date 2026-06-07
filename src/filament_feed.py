@@ -572,6 +572,8 @@ class FilamentFeed:
 
         for ch in range(FEED_CHANNEL_NUMS):
             if extruder == self.filament_ch[ch]:
+                if self.channel_state[ch] in [FEED_STA_LOAD_FEEDING, FEED_STA_LOAD_EXTRUDING, FEED_STA_LOAD_FLUSHING]:
+                    return
                 self.reactor.register_async_callback(
                     (lambda et, c=self._do_feed, ch=ch, action=FEED_ACT_FILAMENT_RUNOUT: c(ch, action)))
                 break

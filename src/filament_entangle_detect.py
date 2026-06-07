@@ -2,7 +2,7 @@ import logging, os
 from . import print_task_config
 
 CHECK_ENTANGLE_INTERVAL                     = 0.1
-ENTANGLE_DETECT_LENGTH_DEFAULT              = 60.0
+ENTANGLE_DETECT_LENGTH_DEFAULT              = 6.0
 ENTANGLE_DETECT_LENGTH_DEFAULT_SOFT         = 120.0
 ENTANGLE_DETECT_LENGTH_DEFAULT_TPU_85       = 180.0
 ENTANGLE_DETECT_LENGTH_DEFAULT_TPU_90       = 120.0
@@ -113,6 +113,8 @@ class FilamentEntangleDetect:
                     self.detection_length = ENTANGLE_DETECT_LENGTH_DEFAULT_TPU_85
         else:
             self.detection_length = ENTANGLE_DETECT_LENGTH_DEFAULT
+            if self.ace_device is not None and self.ace_device.feed_assist():
+                self.detection_length = ENTANGLE_DETECT_LENGTH_DEFAULT_TPU_85
             
         self.last_position = self._get_extruder_pos()
         self.skip_length_remained = self.skip_length
@@ -169,10 +171,7 @@ class FilamentEntangleDetect:
     def _check_entangle_event(self, eventtime):
         if self._need_to_check_entanglement() == False:
             return self.reactor.monotonic() + CHECK_ENTANGLE_INTERVAL
-            
-        if self.ace_device is not None and self.ace_device.disable_ap():
-            return self.reactor.monotonic() + CHECK_ENTANGLE_INTERVAL
-        
+
         new_position = self._get_extruder_pos()
         new_wheel_counts = self.filament_feed_module.wheel[self.filament_feed_channel].get_counts()
         new_wheel_2_counts = self.filament_feed_module.wheel_2[self.filament_feed_channel].get_counts()
@@ -215,12 +214,16 @@ class FilamentEntangleDetect:
         if delta_position >= (self.detection_length * self.config['detect_factor'] * global_detect_sen):
             dest_delta_count = int(delta_position / (self.detection_length * self.config['detect_factor'] * global_detect_sen))
             is_tangled = False
-            if check_wheel_counts == True:
-                if delta_count < dest_delta_count:
+            if check_wheel_counts == True and check_wheel_2_counts == True:
+                if delta_count < dest_delta_count and delta_count_2 < dest_delta_count:
                     is_tangled = True
-            if check_wheel_2_counts == True:
-                if delta_count_2 < dest_delta_count:
-                    is_tangled = True
+            else:
+                if check_wheel_counts == True:
+                    if delta_count < dest_delta_count:
+                        is_tangled = True
+                if check_wheel_2_counts == True:
+                    if delta_count_2 < dest_delta_count:
+                        is_tangled = True
 
             if is_tangled:
                 self.printer.send_event("print_stats:update_exception_info",
@@ -283,3 +286,4 @@ class FilamentEntangleDetect:
 
 def load_config_prefix(config):
     return FilamentEntangleDetect(config)
+

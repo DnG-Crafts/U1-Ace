@@ -1,54 +1,71 @@
 # https://github.com/DnG-Crafts/U1-Ace
-import serial, threading, time, logging, struct, queue, glob, copy, random, configparser
+import serial, threading, time, logging, struct, queue, traceback, glob, copy, random, configparser
 from datetime import datetime
 from . import filament_protocol
 
-PREAMBLE      = b'\xff\xaa'
-END_MARKER    = 0xFE
-FLAG_REQUEST  = 0x00
-FLAG_RESPONSE = 0x80
 
-class Cmd:
-    DISCOVER_DEVICE       = 0
-    ASSIGN_DEVICE_ID      = 1
-    GET_STATUS            = 6
-    GET_INFO              = 7
-    FEED_OR_ROLLBACK      = 8
-    STOP_FEED_OR_ROLLBACK = 9
-    UPDATE_SPEED          = 10
-    DRYING                = 11
-    SET_DRY_TEMP          = 12
-    GET_FILAMENT_INFO     = 13
-    SET_RFID_ENABLE       = 14
-    SET_FEED_CHECK        = 19
-    GET_TEMP              = 64
-    SET_FAN               = 71
+_PREAMBLE       = b'\xff\xaa'
+_END_MARKER     = 0xFE
+_FLAG_REQUEST   = 0x00
+_MAX_PAYLOAD    = 100
 
-WORK_STATES = {0: "INIT", 1: "IDLE", 2: "BUSY", 3: "UPGRADE"}
-SLOT_STATES = {
-    0: "READY", 1: "FEEDING", 2: "ROLLBACK", 3: "ASSISTING",
-    4: "ROLLBACK_ASSISTING", 5: "PRELOADING", 6: "UPGRADING",
-    129: "FEED_ERROR", 130: "ROLLBACK_ERROR", 131: "ASSIST_ERROR",
-    132: "PRELOAD_ERROR", 133: "STUCK_ERROR", 134: "TANGLED_ERROR",
-    135: "MOTOR_ERROR",
+_CMD_DISCOVER_DEVICE       = 0
+_CMD_ASSIGN_DEVICE_ID      = 1
+_CMD_GET_STATUS            = 6
+_CMD_FEED_OR_ROLLBACK      = 8
+_CMD_STOP_FEED_OR_ROLLBACK = 9
+_CMD_DRYING                = 11
+_CMD_GET_FILAMENT_INFO     = 13
+_CMD_SET_FEED_CHECK        = 19
+_CMD_GET_TEMP              = 64
+
+_FEED_MODE_FEED          = 0
+_FEED_MODE_ROLLBACK      = 1
+_FEED_MODE_FEED_ASSIST   = 2
+_FEED_MODE_UNWIND_ASSIST = 3
+_FEED_ASSIST_SPEED       = 10
+_UNWIND_ASSIST_SPEED     = 0
+
+_SLOT_READY              = 0
+_SLOT_FEEDING            = 1
+_SLOT_ROLLBACK           = 2
+_SLOT_ASSISTING          = 3
+_SLOT_ROLLBACK_ASSISTING = 4
+_SLOT_PRELOADING         = 5
+_SLOT_FEED_ERROR         = 129
+_FILAMENT_EMPTY          = 0
+_FILAMENT_IDENTIFIED     = 2
+
+_VELOCITY_IDLE_THRESHOLD = 0.001
+_FF_ACTIVE_PREFIXES = ('load_', 'unload_', 'preload_', 'manual_sta_')
+
+_DRY_STATE_NAMES = {
+    0: 'free', 1: 'starting', 2: 'keeping', 3: 'stopping',
+    4: 'ptc_error', 5: 'ntc_error',
 }
-FILAMENT_STATES = {0: "EMPTY", 1: "UNKNOWN", 2: "IDENTIFIED", 3: "IDENTIFYING"}
-DRY_STATES = {0: "FREE", 1: "STARTING", 2: "KEEPING", 3: "STOPPING", 4: "PTC_ERROR", 5: "NTC_ERROR"}
+_SLOT_ERROR_BY_RAW = {
+    129: 'feed_error', 130: 'rollback_error', 131: 'assist_error',
+    132: 'preload_error', 133: 'stuck', 134: 'tangled', 135: 'motor_error',
+}
 
-FEED_MODE_FORWARD  = 0
-FEED_MODE_ROLLBACK = 1
-ASSIST_MODE_FORWARD = 2
-ASSIST_MODE_ROLLBACK = 3
+ACE_ERROR_STATUSES = {
+    'feed_error', 'rollback_error', 'preload_error',
+    'stuck', 'tangled', 'motor_error', 'error',
+}
+_STATES_INCOMPATIBLE_WITH_ASSIST = {
+    'ready', 'feeding', 'unwinding', 'preload', 'empty',
+}
 
-def _crc16_kermit(data: bytes) -> int:
+
+def _crc16_kermit(data):
     crc = 0xFFFF
-    for byte in data:
-        crc ^= byte
+    for b in data:
+        crc ^= b
         for _ in range(8):
             crc = (crc >> 1) ^ 0x8408 if crc & 1 else crc >> 1
     return crc & 0xFFFF
 
-def pb_varint(value: int) -> bytes:
+def _pb_varint(value):
     r = bytearray()
     while value > 0x7F:
         r.append((value & 0x7F) | 0x80)
@@ -56,17 +73,13 @@ def pb_varint(value: int) -> bytes:
     r.append(value & 0x7F)
     return bytes(r)
 
-def pb_uint32(field: int, value: int) -> bytes:
-    return pb_varint((field << 3) | 0) + pb_varint(value)
+def _pb_uint32(field, value):
+    return _pb_varint((field << 3) | 0) + _pb_varint(int(value) & 0xFFFFFFFF)
 
-def pb_bool(field: int, value: bool) -> bytes:
-    return pb_varint((field << 3) | 0) + pb_varint(1 if value else 0)
+def _pb_bool(field, value):
+    return _pb_varint((field << 3) | 0) + _pb_varint(1 if value else 0)
 
-def pb_string(field: int, value: str) -> bytes:
-    enc = value.encode('utf-8')
-    return pb_varint((field << 3) | 2) + pb_varint(len(enc)) + enc
-
-def pb_decode_varint(data: bytes, pos: int):
+def _pb_decode_varint(data, pos):
     result, shift = 0, 0
     while pos < len(data):
         b = data[pos]; pos += 1
@@ -76,229 +89,302 @@ def pb_decode_varint(data: bytes, pos: int):
         shift += 7
     return result, pos
 
-def pb_decode(data: bytes) -> dict:
-    fields, pos = {}, 0
-    while pos < len(data):
-        tag, pos = pb_decode_varint(data, pos)
-        fnum, wtype = tag >> 3, tag & 7
-        if wtype == 0:
-            val, pos = pb_decode_varint(data, pos)
+def _pb_decode(data):
+    fields = {}
+    pos = 0; n = len(data)
+    while pos < n:
+        tag, pos = _pb_decode_varint(data, pos)
+        fnum = tag >> 3; wtype = tag & 7
+        if wtype == 0:   val, pos = _pb_decode_varint(data, pos)
         elif wtype == 1:
-            val = struct.unpack_from('<d', data, pos)[0] if pos + 8 <= len(data) else 0
-            pos += 8
+            if pos + 8 > n: break
+            val = struct.unpack_from('<d', data, pos)[0]; pos += 8
         elif wtype == 2:
-            ln, pos = pb_decode_varint(data, pos)
-            val = data[pos:pos + ln]; pos += ln
+            ln, pos = _pb_decode_varint(data, pos)
+            if pos + ln > n: break
+            val = bytes(data[pos:pos + ln]); pos += ln
         elif wtype == 5:
-            val = struct.unpack_from('<f', data, pos)[0] if pos + 4 <= len(data) else 0
-            pos += 4
-        else:
-            break
+            if pos + 4 > n: break
+            val = struct.unpack_from('<f', data, pos)[0]; pos += 4
+        else: break
         fields.setdefault(fnum, []).append((wtype, val))
     return fields
 
-def _fval(fields: dict, num: int, default=0):
-    return fields.get(num, [(0, default)])[0][1]
+def _pb_first(fields, num, default=0):
+    lst = fields.get(num)
+    return lst[0][1] if lst else default
 
-def _build_packet(cmd: int, payload: bytes = b'', seq: int = 1) -> bytes:
-    plen = min(len(payload), 100)
-    inner = bytearray([FLAG_REQUEST, seq & 0xFF, (seq >> 8) & 0xFF, cmd & 0xFF, plen & 0xFF])
+def _pb_str(fields, num, default=''):
+    val = _pb_first(fields, num, default)
+    if isinstance(val, (bytes, bytearray)):
+        try: return val.decode('utf-8', errors='ignore')
+        except: return default
+    return val
+
+def _build_packet(cmd, payload=b'', seq=1, flags=_FLAG_REQUEST):
+    plen = min(len(payload), _MAX_PAYLOAD)
+    inner = bytearray([flags & 0xFF, seq & 0xFF, (seq >> 8) & 0xFF,
+                       cmd & 0xFF, plen & 0xFF])
     inner.extend(payload[:plen])
     crc = _crc16_kermit(bytes(inner))
-    return bytes(PREAMBLE + inner + bytes([crc & 0xFF, (crc >> 8) & 0xFF, END_MARKER]))
+    return _PREAMBLE + bytes(inner) + bytes([crc & 0xFF, (crc >> 8) & 0xFF, _END_MARKER])
 
-def _parse_packet(buf: bytearray):
-    while len(buf) >= 2:
-        idx = buf.find(PREAMBLE)
-        if idx < 0:
-            return None, max(0, len(buf) - 1)
-        if idx > 0:
-            return None, idx
-        if len(buf) < 10:
-            return None, 0
-        for end in range(9, min(len(buf), 120)):
-            if buf[end] != END_MARKER:
-                continue
-            flags = buf[2]
-            seq   = buf[3] | (buf[4] << 8)
-            cmd   = buf[5]
-            plen  = buf[6]
-            exp   = 7 + plen + 2
-            if end != exp:
-                continue
-            inner   = bytes(buf[2:7 + plen])
-            crc_r   = buf[7 + plen] | (buf[8 + plen] << 8)
-            if crc_r != _crc16_kermit(inner):
-                return None, end + 1
-            return {
-                "cmd":     cmd,
-                "is_resp": bool(flags & FLAG_RESPONSE),
-                "flags":   flags,
-                "seq":     seq,
-                "payload": bytes(buf[7:7 + plen]),
-            }, end + 1
-        return None, 2 if len(buf) > 120 else 0
-    return None, 0
+def _parse_stream(buf):
+    packets = []
+    while True:
+        if len(buf) < 10: break
+        idx = buf.find(_PREAMBLE)
+        if idx < 0: del buf[:-1]; break
+        if idx > 0: del buf[:idx]; continue
+        plen = buf[6]
+        if plen > _MAX_PAYLOAD: del buf[:2]; continue
+        total = 2 + 5 + plen + 2 + 1
+        if len(buf) < total: break
+        if buf[total - 1] != _END_MARKER: del buf[:2]; continue
+        inner = bytes(buf[2:7 + plen])
+        crc_r = buf[7 + plen] | (buf[8 + plen] << 8)
+        if crc_r != _crc16_kermit(inner): del buf[:2]; continue
+        packets.append({
+            'cmd':     buf[5],
+            'seq':     buf[3] | (buf[4] << 8),
+            'flags':   buf[2],
+            'is_resp': bool(buf[2] & 0x80),
+            'payload': bytes(buf[7:7 + plen]),
+        })
+        del buf[:total]
+    return packets, buf
 
+def _slot_status_to_v1(slot_state, fil_state):
+    if fil_state == _FILAMENT_EMPTY:                               return 'empty'
+    if slot_state == _SLOT_FEEDING:                                return 'feeding'
+    if slot_state == _SLOT_PRELOADING:                             return 'preload'
+    if slot_state == _SLOT_ROLLBACK:                               return 'unwinding'
+    if slot_state in (_SLOT_ASSISTING, _SLOT_ROLLBACK_ASSISTING):  return 'assisting'
+    err = _SLOT_ERROR_BY_RAW.get(slot_state)
+    if err:                                                        return err
+    if slot_state >= _SLOT_FEED_ERROR:                             return 'error'
+    return 'ready'
+
+def _decode_status(payload):
+    f = _pb_decode(payload)
+    slots = []
+    for _, sd in f.get(9, []):
+        sf = _pb_decode(sd)
+        ss = _pb_first(sf, 1, 0); fs = _pb_first(sf, 2, 0)
+        slots.append({
+            'status': _slot_status_to_v1(ss, fs),
+            'rfid': 2 if fs == _FILAMENT_IDENTIFIED else (1 if fs != _FILAMENT_EMPTY else 0),
+        })
+    result = {
+        'status': 'ready', 'slots': slots,
+        'temp': _pb_first(f, 3, 0), 'humidity': _pb_first(f, 4, 0),
+        'feed_assist_count': _pb_first(f, 7, 0),
+    }
+    if 2 in f:
+        d = _pb_decode(f[2][0][1])
+        result['dryer_status'] = {
+            'status':      _DRY_STATE_NAMES.get(_pb_first(d, 1, 0), 'free'),
+            'target_temp': _pb_first(d, 2, 0),
+            'duration':    _pb_first(d, 3, 0),
+            'remain_time': _pb_first(d, 4, 0),
+        }
+    return {'result': result}
+
+def _decode_generic(payload):
+    return {'code': _pb_first(_pb_decode(payload), 1, 0), 'msg': ''}
+
+def _decode_temp(payload):
+    f = _pb_decode(payload)
+    def _flt(n):
+        lst = f.get(n)
+        if not lst: return 0.0
+        try: return float(lst[0][1])
+        except: return 0.0
+    return {'result': {
+        'box1_temp': _flt(1), 'box2_temp': _flt(2),
+        'ptc1_temp': _flt(3), 'ptc2_temp': _flt(4),
+        'env_temp':  _flt(5), 'env_humidity': _flt(6),
+    }}
+
+def _decode_filament_info(payload):
+    f = _pb_decode(payload)
+    sku = _pb_str(f, 3, ''); typ = _pb_str(f, 4, '')
+    colors = []; primary_rgb = [0, 0, 0]
+    for i, (_, c_data) in enumerate(f.get(5, [])):
+        cf = _pb_decode(c_data)
+        rgba = _pb_first(cf, 1, 0) & 0xFFFFFFFF
+        r = (rgba >> 24) & 0xFF; g = (rgba >> 16) & 0xFF
+        b = (rgba >> 8) & 0xFF;  a = rgba & 0xFF
+        colors.append([r, g, b, a])
+        if i == 0: primary_rgb = [r, g, b]
+    if not colors: colors = [[0, 0, 0, 255]]
+    ex_min = ex_max = bd_min = bd_max = 0
+    if 6 in f:
+        ef = _pb_decode(f[6][0][1])
+        ex_min = _pb_first(ef, 1, 0); ex_max = _pb_first(ef, 2, 0)
+    if 7 in f:
+        hf = _pb_decode(f[7][0][1])
+        bd_min = _pb_first(hf, 1, 0); bd_max = _pb_first(hf, 2, 0)
+    diam_raw = _pb_first(f, 8, 175)
+    try:    diameter = diam_raw / 100.0
+    except: diameter = 1.75
+    return {'result': {
+        'index': _pb_first(f, 1, 0), 'sku': sku, 'type': typ, 'brand': '',
+        'color': primary_rgb, 'colors': colors,
+        'extruder_temp': {'min': ex_min, 'max': ex_max},
+        'hotbed_temp':   {'min': bd_min, 'max': bd_max},
+        'diameter': diameter, 'total': _pb_first(f, 9, 0),
+        'remainder': _pb_first(f, 11, 0), 'code': _pb_first(f, 12, 0),
+        'rfid': 2 if (sku or typ) else 1,
+    }}
 
 class AceDevice:
+
     def __init__(self, config):
         self.printer = config.get_printer()
         self.printer.add_object('ace_device', self)
         self.reactor = self.printer.get_reactor()
-        self.gcode = self.printer.lookup_object('gcode')
+        self.gcode   = self.printer.lookup_object('gcode')
 
-        self.serial_name = config.get('serial', '/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B5F070433-if00')
-        all_devices = glob.glob('/dev/serial/by-id/usb-1a86_USB*')
-        if all_devices:
-            self.serial_name = all_devices[0]
+        self.serial_name = config.get('serial', '/dev/serial/by-id/*')
+        all_devices = glob.glob('/dev/serial/by-id/*')
+        preferred = [d for d in all_devices if 'usb-1a86_USB' in d]
+        fallback = [d for d in all_devices if 'Klipper' not in d]
+        candidates = preferred or fallback
+        if candidates:
+            self.serial_name = candidates[0]
             logging.info("ACE: Found serial port: %s", self.serial_name)
         else:
-            logging.info("ACE: No devices auto detected, Using config serial path %s", self.serial_name)
+            logging.warning("ACE: No serial device found, stopping initialisation")
+            return
 
         self.baud = config.getint('baud', 230400)
-        self.feed_speed = config.getint('feed_speed', 90)
-        self.assist_speed = config.getint('assist_speed', 10)
-        self.load_speed = config.getint('load_speed', 100)
-        self.retract_speed = config.getint('retract_speed', 25)
-        self.max_dryer_temp = config.getint('max_dryer_temperature', 65)
-        self.enable_feed_assist = config.getboolean('enable_feed_assist', True)
-        self.enable_feeder_mode = config.getboolean('enable_feeder_mode', False)
-        self.disable_u1_rfid = config.getboolean('disable_u1_rfid', False)
-        self.force_generic = config.getboolean('force_generic', False)
-        self.disable_air_print = config.getboolean('disable_air_print', False)
-        
-        self.feed_lengths = [
-            config.getint('feed_length_slot1', 1000),
-            config.getint('feed_length_slot2', 1000),
-            config.getint('feed_length_slot3', 1000),
-            config.getint('feed_length_slot4', 1000)
-        ]
+        if self.baud != 230400:
+            self.baud = 230400
+        self.feed_speed            = config.getint('feed_speed', 0)
+        self.load_speed            = min(100, max(0, config.getint('load_speed', 100)))
+        self.retract_speed         = min(100, max(0, config.getint('retract_speed', 100)))
+        self.feed_check_len        = config.getint('feed_check_len', 100)
+        self.feed_check_error_len  = config.getint('feed_check_error_len', 90)
+        self.max_dryer_temp        = config.getint('max_dryer_temperature', 65)
+        self.enable_feed_assist    = config.getboolean('enable_feed_assist', True)
+        self.assist_mode_confirm_time = config.getfloat('assist_mode_confirm_time', 1.0)
+        self.feed_assist_idle_timeout = config.getfloat('feed_assist_idle_timeout', 5.0)
+        self.enable_feeder_mode    = config.getboolean('enable_feeder_mode', False)
+        self.disable_u1_rfid       = config.getboolean('disable_u1_rfid', False)
+        self.force_generic         = config.getboolean('force_generic', False)
+        self.disable_air_print     = config.getboolean('disable_air_print', False)
+        self.assist_stop_retract_length = config.getint('assist_stop_retract_length', 10)
 
-        self.load_lengths = [
-            config.getint('load_length_slot1', 850),
-            config.getint('load_length_slot2', 850),
-            config.getint('load_length_slot3', 850),
-            config.getint('load_length_slot4', 850)
-        ]
+        self.feed_lengths    = [config.getint('feed_length_slot%d' % (i+1), 1000) for i in range(4)]
+        self.load_lengths    = [config.getint('load_length_slot%d' % (i+1), 850)  for i in range(4)]
+        self.retract_lengths = [config.getint('retract_length_slot%d' % (i+1), 3000) for i in range(4)]
 
-        self.retract_lengths = [
-            config.getint('retract_length_slot1', 100),
-            config.getint('retract_length_slot2', 100),
-            config.getint('retract_length_slot3', 100),
-            config.getint('retract_length_slot4', 100)
-        ]
-
-        self._connected = False
-        self._serial = None
-        self._seq = 0
-        self._cb_lock = threading.Lock()
-        self._queue = queue.Queue()
+        self._connected       = False
+        self._serial          = None
+        self._queue           = queue.Queue()
+        self._seq          = 0
         self._callback_map = {}
-        self._info = {}
-        self._feed_assist_index = -1
-        self._last_filament_data = [("", "", [0, 0, 0])] * 4
-        self._virtual_uids = [[0]*7 for _ in range(4)]
-        self._initialized = False
-        self.port_sensor_hit = [False, False, False, False]
-        self._last_filament_status = ['empty', 'empty', 'empty', 'empty']
-        self._active_feeds = set()
-        self._feed_start_times = {}
-        self._timeout_threshold = 60.0
-        self.auto_feed_step = [0, 0, 0, 0]
-        self.feed_sent = [False, False, False, False]
-        self._last_active_tool = None
-        self._last_active_index = -1
-        self._pending_start_index = -1
-        self._next_cmd_time = 0
-
-        self._processed_extruders = set()
-        self._last_f_stages = {}
-        self._last_action = None
-        self._allow_triggers = False
-
+        self._rx_buf       = bytearray()
+        self._info                  = {}
+        self.port_sensor_hit        = [False, False, False, False]
+        self._last_filament_status  = ['empty', 'empty', 'empty', 'empty']
+        self._last_logged_slot_status = [None, None, None, None]
+        self._active_feeds          = set()
+        self._feed_start_times      = {}
+        self._timeout_threshold     = 60.0
+        self.auto_feed_step         = [0, 0, 0, 0]
+        self._last_active_tool      = None
+        self._last_active_index     = -1
+        self._printing              = False
+        self._assist_active_slots   = set()
+        self._assist_mode_per_slot  = {}
+        self._pending_mode_switch   = {}
+        self._last_extrusion_times  = {}
+        self._retract_in_progress   = set()
         self._writer_thread = None
         self._reader_thread = None
 
-        self.printer.register_event_handler('klippy:ready', self._handle_ready)
-        self.printer.register_event_handler('klippy:disconnect', self._handle_disconnect)
-        self.printer.register_event_handler("filament_feed:port", self._feed_handler)
-        self.printer.register_event_handler('print_stats:start', self._handle_start_print_job)
-        self.printer.register_event_handler('print_stats:stop', self._handle_stop_print_job)
-        self.printer.register_event_handler('idle_timeout:idle', self._handle_not_printing)
+        self.printer.register_event_handler('klippy:ready',       self._handle_ready)
+        self.printer.register_event_handler('klippy:disconnect',  self._handle_disconnect)
+        self.printer.register_event_handler('filament_feed:port', self._feed_handler)
+        self.printer.register_event_handler('print_stats:start',  self._handle_start_print_job)
+        self.printer.register_event_handler('print_stats:stop',   self._handle_stop_print_job)
+        self.printer.register_event_handler('idle_timeout:idle',  self._handle_not_printing)
 
-        self.gcode.register_command('ACE_START_DRYING', self.cmd_ACE_START_DRYING)
-        self.gcode.register_command('ACE_STOP_DRYING', self.cmd_ACE_STOP_DRYING)
+        self.gcode.register_command('ACE_START_DRYING',    self.cmd_ACE_START_DRYING)
+        self.gcode.register_command('ACE_STOP_DRYING',     self.cmd_ACE_STOP_DRYING)
+        self.gcode.register_command('ACE_GET_TEMP',        self.cmd_ACE_GET_TEMP)
+        self.gcode.register_command('ACE_GET_STATUS',      self.cmd_ACE_GET_STATUS)
         self.gcode.register_command('SET_FILAMENT_CONFIG', self.cmd_SET_FILAMENT_CONFIG)
 
-    def feeder_mode(self):
-        return self.enable_feeder_mode
+    def feeder_mode(self):   return False
+    def feed_assist(self):   return True
+    def disable_rfid(self):  return self.disable_u1_rfid
+    def disable_ap(self):    return self.disable_air_print
+    
+    
+    def is_ready(self):      return self._connected and bool(self._info)
+    def get_filament_detect(self, index):
+        return 0 if self._last_filament_status[index] == 'empty' else 1
 
-    def feed_assist(self):
-        return self.enable_feed_assist
-
-    def disable_rfid(self):
-        return self.disable_u1_rfid
-
-    def disable_ap(self):
-        return self.disable_air_print
-        
     def check_rfid_status(self):
-        config = configparser.ConfigParser()
+        cfg = configparser.ConfigParser()
         try:
-            config.read('/oem/printer_data/config/extended/extended2.cfg')
-            rfid_value = config.get('components', 'rfid', fallback=None)
-            return rfid_value == "openrfid-generic"
+            cfg.read('/oem/printer_data/config/extended/extended2.cfg')
+            return cfg.get('components', 'rfid', fallback=None) == "openrfid-generic"
         except Exception:
             return False
 
-    def _handle_start_print_job(self):
-        logging.info("ACE: Print job started.")
-        self._last_active_index = -1
-        self._last_active_tool = None
+    def dwell(self, delay):
+        self.printer.lookup_object('toolhead').dwell(delay)
 
-    def _handle_not_printing(self, eventtime):
-        logging.info("ACE: Printer is now IDLE/Ready.")
-        if self._last_active_index != -1 and self.enable_feed_assist:
-            for i in range(4):
-                self.send_request(cmd=Cmd.STOP_FEED_OR_ROLLBACK,
-                                  payload=pb_uint32(1, i),
-                                  callback=None)
-        self._last_active_index = -1
-        self._last_active_tool = None
-
-    def _handle_stop_print_job(self):
-        logging.info("ACE: Print job stopped/completed.")
-        if self._last_active_index != -1 and self.enable_feed_assist:
-            for i in range(4):
-                self.send_request(cmd=Cmd.STOP_FEED_OR_ROLLBACK,
-                                  payload=pb_uint32(1, i),
-                                  callback=None)
-        self._last_active_index = -1
-        self._last_active_tool = None
-
-    def _next_seq(self) -> int:
-        with self._cb_lock:
-            self._seq = (self._seq % 0xFFFF) + 1
-            return self._seq
-
-    def _send_packet(self, cmd: int, payload: bytes, seq: int):
-        if not self._connected or not self._serial:
-            return
-        try:
-            data = _build_packet(cmd, payload, seq)
-            self._serial.write(data)
-        except Exception as e:
-            logging.error("ACE: Serial write failed, disconnecting: %s", e)
-            self._connected = False
-
-    def send_request(self, cmd: int, payload: bytes = b'', callback=None):
-        self._queue.put((cmd, payload, callback))
+    def _send(self, cmd, payload, decoder, callback):
+        self._queue.put((cmd, payload, decoder, callback))
 
     def _handle_ready(self):
         self.connection_timer = self.reactor.register_timer(
             self._connection_timer, self.reactor.NOW)
-        logging.info("ACE: Connection monitor started")
+        logging.info("ACE: connection monitor started")
+        self._assist_loop_timer = self.reactor.register_timer(
+            self._assist_loop_eval, self.reactor.NOW)
+
+    def _handle_disconnect(self):
+        self._connected = False
+        if self._serial:
+            try: self._serial.close()
+            except: pass
+        self._serial = None
+        try: self.reactor.unregister_timer(self.main_timer)
+        except: pass
+
+    def _handle_start_print_job(self):
+        logging.info("ACE: print job started")
+        self._printing = True
+        self._last_active_index = -1
+        self._last_active_tool  = None
+        self._last_extrusion_times.clear()
+
+    def _handle_not_printing(self, _eventtime):
+        logging.info("ACE: printer idle")
+        self._printing = False
+        if self._last_active_index != -1:
+            for i in range(4):
+                self._stop_feed_assist(i, why='printer_idle')
+        self._last_active_index = -1
+        self._last_active_tool  = None
+
+    def _handle_stop_print_job(self):
+        logging.info("ACE: print job stopped")
+        self._printing = False
+        if self._last_active_index != -1:
+            for i in range(4):
+                self._stop_feed_assist(i, why='print_stopped')
+        self._last_active_index = -1
+        self._last_active_tool  = None
+
+    def _feed_handler(self, channel, detect):
+        self.port_sensor_hit[channel] = detect
 
     def _connection_timer(self, eventtime):
         if not self._connected:
@@ -308,489 +394,611 @@ class AceDevice:
     def _attempt_connection(self):
         try:
             if self._serial:
-                try:
-                    self._serial.close()
-                except Exception:
-                    pass
-
+                try: self._serial.close()
+                except: pass
             self._serial = serial.Serial(
                 port=self.serial_name, baudrate=self.baud, timeout=0.2)
-            if self._serial.isOpen():
-                self._connected = True
-
-                if self._writer_thread is None or not self._writer_thread.is_alive():
-                    self._writer_thread = threading.Thread(
-                        target=self._writer, daemon=True)
-                    self._writer_thread.start()
-
-                if self._reader_thread is None or not self._reader_thread.is_alive():
-                    self._reader_thread = threading.Thread(
-                        target=self._reader, daemon=True)
-                    self._reader_thread.start()
-
-                self.main_timer = self.reactor.register_timer(
-                    self._main_eval, self.reactor.NOW)
-                logging.info("ACE: Connected successfully")
+            if not self._serial.isOpen():
+                return
+            self._connected = True
+            self._assist_active_slots.clear()
+            self._assist_mode_per_slot.clear()
+            self._pending_mode_switch.clear()
+            self._last_extrusion_times.clear()
+            self._retract_in_progress.clear()
+            self._rx_buf       = bytearray()
+            self._callback_map = {}
+            self._seq          = 0
+            self._handshake()
+            self._send(_CMD_SET_FEED_CHECK,
+                       _pb_uint32(1, self.feed_check_len) + _pb_uint32(2, self.feed_check_error_len),
+                       _decode_generic, None)
+            if self._writer_thread is None or not self._writer_thread.is_alive():
+                self._writer_thread = threading.Thread(target=self._writer)
+                self._writer_thread.setDaemon(True)
+                self._writer_thread.start()
+            if self._reader_thread is None or not self._reader_thread.is_alive():
+                self._reader_thread = threading.Thread(target=self._reader)
+                self._reader_thread.setDaemon(True)
+                self._reader_thread.start()
+            self.main_timer = self.reactor.register_timer(
+                self._main_eval, self.reactor.NOW)
+            logging.info("ACE: connected successfully")
         except Exception as e:
             self._connected = False
-            logging.error("ACE: Connection attempt failed: %s", e)
+            logging.error("ACE: connection failed: %s", e)
 
-    def _handle_disconnect(self):
-        self._connected = False
-        if self._serial:
-            try:
-                self._serial.close()
-            except Exception:
-                pass
-        self._serial = None
+    def _handshake(self):
         try:
-            self.reactor.unregister_timer(self.main_timer)
-        except Exception:
-            pass
-
-    def _feed_handler(self, channel, detect):
-        self.port_sensor_hit[channel] = detect
-
-    def update_sensors(self, eventtime):
-        if self.enable_feeder_mode:
-            return
-        for i in range(4):
-            sensor_name = 'filament_motion_sensor e%d_filament' % i
-            s_obj = self.printer.lookup_object(sensor_name, None)
-            if s_obj is not None:
-                status = s_obj.get_status(eventtime)
-                self.port_sensor_hit[i] = status.get('filament_detected', False)
+            self._serial.reset_input_buffer()
+            self._serial.write(_build_packet(_CMD_DISCOVER_DEVICE, b'', seq=1))
+            self._serial.flush()
+            buf = bytearray()
+            deadline = time.time() + 1.0
+            uids = None
+            while time.time() < deadline and uids is None:
+                n = self._serial.in_waiting
+                if n:
+                    buf.extend(self._serial.read(n))
+                    packets, buf = _parse_stream(buf)
+                    for p in packets:
+                        if (p['is_resp'] and p['cmd'] == _CMD_DISCOVER_DEVICE and p['payload']):
+                            f = _pb_decode(p['payload'])
+                            uids = (_pb_first(f, 1, 0), _pb_first(f, 2, 0), _pb_first(f, 3, 0))
+                            break
+                else:
+                    time.sleep(0.02)
+            if uids is not None:
+                logging.info("ACE: discovered uid 0x%08X-0x%08X-0x%08X", uids[0], uids[1], uids[2])
+                assign_pay = (_pb_uint32(1, uids[0]) + _pb_uint32(2, uids[1])
+                              + _pb_uint32(3, uids[2]) + _pb_uint32(4, 1))
+                self._serial.write(_build_packet(_CMD_ASSIGN_DEVICE_ID, assign_pay, seq=2))
+                self._serial.flush()
+                time.sleep(0.2)
             else:
-                self.port_sensor_hit[i] = False
+                logging.info("ACE: no discover response; proceeding anyway")
+            self._serial.reset_input_buffer()
+            self._seq = 2
+        except Exception as e:
+            logging.warning("ACE: handshake failed (continuing): %s", e)
 
-    def get_sensor_state(self, index, eventtime):
-        sensor_name = 'filament_motion_sensor e%d_filament' % index
-        s_obj = self.printer.lookup_object(sensor_name, None)
-        if s_obj is not None:
-            status = s_obj.get_status(eventtime)
-            return status.get('filament_detected', False)
-        return False
+    def _next_seq(self):
+        self._seq = (self._seq % 0xFFFE) + 1
+        return self._seq
 
-    def _main_eval(self, eventtime):
-        print_stats = self.printer.lookup_object('print_stats', None)
-        if print_stats is not None:
-            stats = print_stats.get_status(eventtime)
-            current_state = stats.get('state')
-            progress = 0.0
-            current_layer = print_stats.info_current_layer
-            if current_layer is None:
-                vsd = self.printer.lookup_object('virtual_sdcard', None)
-                if vsd:
-                    vsd_status = vsd.get_status(eventtime)
-                    if vsd_status:
-                        progress = vsd_status.get('progress', 0)
-
-            if current_layer is None:
-                current_layer = 0
-
-            if current_state == "printing" and (current_layer > 0 or progress > 0.0):
-                toolhead = self.printer.lookup_object('toolhead', None)
-                if toolhead:
-                    th_status = toolhead.get_status(eventtime)
-                    active_name = th_status.get('extruder')
-                    new_idx = 0
-                    if active_name.startswith('extruder'):
-                        num_part = active_name[8:]
-                        new_idx = int(num_part) if num_part.isdigit() else 0
-
-                    if active_name != self._last_active_tool:
-                        old_idx = self._last_active_index
-                        logging.info(
-                            "ACE: Swap detected: %s (Idx %s) -> %s (Idx %s)",
-                            self._last_active_tool, old_idx, active_name, new_idx)
-
-                        self._last_active_tool = active_name
-                        self._last_active_index = new_idx
-
-                        if self.enable_feed_assist:
-                            self.send_request(
-                                cmd=Cmd.FEED_OR_ROLLBACK,
-                                payload=(pb_uint32(1, new_idx)
-                                         + pb_uint32(2, self.assist_speed)
-                                         + pb_uint32(3, 0)
-                                         + pb_uint32(4, ASSIST_MODE_FORWARD)),
-                                callback=None)
-
-                return eventtime + 0.25
-
-        if not self.enable_feed_assist or not self.enable_feeder_mode:
-            feeds_to_remove = []
-            for idx in self._active_feeds:
-                if self.get_sensor_state(idx, eventtime):
-                    self.send_request(
-                        cmd=Cmd.STOP_FEED_OR_ROLLBACK,
-                        payload=pb_uint32(1, idx),
-                        callback=None)
-                    feeds_to_remove.append(idx)
-                elif eventtime > self._feed_start_times.get(idx, 0) + self._timeout_threshold:
-                    logging.warning("ACE: Feed slot %d TIMEOUT. Stopping.", idx)
-                    self.send_request(
-                        cmd=Cmd.STOP_FEED_OR_ROLLBACK,
-                        payload=pb_uint32(1, idx),
-                        callback=None)
-                    feeds_to_remove.append(idx)
-
-            for idx in feeds_to_remove:
-                self._active_feeds.discard(idx)
-                self._feed_start_times.pop(idx, None)
-
-        self.update_sensors(eventtime)
-
-        msm = self.printer.lookup_object('machine_state_manager', None)
-        fd = self.printer.lookup_object('filament_detect', None)
-
-        if msm is not None and fd is not None:
-            msm_status = msm.get_status()
-            action_code = msm_status.get('action_code')
-
-            if action_code != self._last_action:
-                logging.info("ACE: Action changed to %s.", action_code)
-                if self._last_action is not None:
-                    self._allow_triggers = True
-                self._last_action = action_code
-
-            for obj_name, f_obj in getattr(fd, 'filament_feed_objects', []):
-                for ch in range(2):
-                    actual_stage = str(f_obj.channel_state[ch])
-                    assigned_extruder = f_obj.filament_ch[ch]
-                    state_key = f"{obj_name}_{ch}"
-
-                    if actual_stage != self._last_f_stages.get(state_key):
-                        logging.info(
-                            "ACE: %s Ch %d | Stage: %s | Extruder: %s",
-                            obj_name, ch, actual_stage, assigned_extruder)
-                        if assigned_extruder is not None:
-                            old_stage = self._last_f_stages.get(state_key)
-                            old_gate_key = f"{int(assigned_extruder)}_{old_stage}"
-                            self._processed_extruders.discard(old_gate_key)
-
-                        self._last_f_stages[state_key] = actual_stage
-
-                    is_preload = actual_stage == "preload_finish"
-                    if assigned_extruder is not None and (self._allow_triggers or is_preload):
-                        idx = int(assigned_extruder)
-                        gate_key = f"{idx}_{actual_stage}"
-
-                        if gate_key not in self._processed_extruders:
-                            if actual_stage == "unload_finish":
-                                logging.info("ACE: [SERIAL] -> UNWIND_SLOT=%d", idx)
-                                self.send_request(
-                                    cmd=Cmd.FEED_OR_ROLLBACK,
-                                    payload=(pb_uint32(1, idx)
-                                             + pb_uint32(2, self.retract_speed)
-                                             + pb_uint32(3, self.retract_lengths[idx])
-                                             + pb_uint32(4, FEED_MODE_ROLLBACK)),
-                                    callback=None)
-                                self._processed_extruders.add(gate_key)
-
-                            elif actual_stage == "load_feeding":
-                                logging.info("ACE: [SERIAL] -> LOAD_SLOT=%d", idx)
-                                if self.enable_feed_assist and self.enable_feeder_mode:
-                                    self.send_request(
-                                        cmd=Cmd.FEED_OR_ROLLBACK,
-                                        payload=(pb_uint32(1, idx)
-                                                 + pb_uint32(2, self.assist_speed)
-                                                 + pb_uint32(3, 0)
-                                                 + pb_uint32(4, ASSIST_MODE_FORWARD)),
-                                        callback=None)
-                                else:
-                                    if not self.get_sensor_state(idx, eventtime):
-                                        self.send_request(
-                                            cmd=Cmd.FEED_OR_ROLLBACK,
-                                            payload=(pb_uint32(1, idx)
-                                                     + pb_uint32(2, 60)
-                                                     + pb_uint32(3, 3000)
-                                                     + pb_uint32(4, FEED_MODE_FORWARD)),
-                                            callback=None)
-                                        self._feed_start_times[idx] = eventtime
-                                        self._active_feeds.add(idx)
-                                    else:
-                                        self.send_request(
-                                            cmd=Cmd.STOP_FEED_OR_ROLLBACK,
-                                            payload=pb_uint32(1, idx),
-                                            callback=None)
-                                self._processed_extruders.add(gate_key)
-
-                            elif actual_stage == "load_fail":
-                                logging.info("ACE: [SERIAL] -> FAILED_SLOT=%d", idx)
-                                self.send_request(
-                                    cmd=Cmd.STOP_FEED_OR_ROLLBACK,
-                                    payload=pb_uint32(1, idx),
-                                    callback=None)
-                                self._active_feeds.discard(idx)
-                                self._feed_start_times.pop(idx, None)
-                                self._processed_extruders.add(gate_key)
-
-                            elif actual_stage == "load_finish":
-                                logging.info("ACE: [SERIAL] -> LOAD_COMPLETE_SLOT=%d", idx)
-                                self.send_request(
-                                    cmd=Cmd.STOP_FEED_OR_ROLLBACK,
-                                    payload=pb_uint32(1, idx),
-                                    callback=None)
-                                self._active_feeds.discard(idx)
-                                self._feed_start_times.pop(idx, None)
-                                self._processed_extruders.add(gate_key)
-
-                            elif actual_stage == "preload_finish":
-                                logging.info("ACE: PRELOAD_COMPLETE_SLOT=%d", idx)
-                                self.set_slot_rfid_info(idx)
-                                self._processed_extruders.add(gate_key)
-
-        return eventtime + 0.25
-
-    def is_ready(self):
-        return self._connected and bool(self._info)
-
-    def get_filament_detect(self, index):
-        return 0 if self._last_filament_status[index] == 'empty' else 1
-
-    def _parse_status_response(self, payload: bytes) -> dict:
-        f = pb_decode(payload)
-        slots = []
-        for _, sd in f.get(9, []):
-            sf = pb_decode(sd)
-            slot_state     = SLOT_STATES.get(_fval(sf, 1), 'unknown').lower()
-            filament_state = FILAMENT_STATES.get(_fval(sf, 2), 'unknown').lower()
-            if slot_state == 'ready':
-                legacy = 'ready'
-            elif slot_state in ('feeding', 'assisting'):
-                legacy = 'feeding'
-            elif slot_state == 'preloading':
-                legacy = 'preload'
-            elif filament_state == 'empty':
-                legacy = 'empty'
-            else:
-                legacy = slot_state
-            slots.append({'status': legacy, 'filament': filament_state})
-
-        dryer = {}
-        if 2 in f:
-            d = pb_decode(f[2][0][1])
-            dryer = {
-                'state':    DRY_STATES.get(_fval(d, 1), 'unknown'),
-                'target':   _fval(d, 2),
-                'duration': _fval(d, 3),
-                'remain':   _fval(d, 4),
-            }
-
-        return {
-            'slots':    slots,
-            'temp':     _fval(f, 3),
-            'humidity': _fval(f, 4),
-            'dryer':    dryer,
-        }
-
-    def _parse_filament_info_response(self, payload: bytes) -> dict:
-        f = pb_decode(payload)
-        result = {}
-        if 1 in f: result['index']     = _fval(f, 1)
-        if 2 in f: result['sku']       = f[2][0][1].decode('utf-8', errors='ignore')
-        if 3 in f: result['brand']       = f[3][0][1].decode('utf-8', errors='ignore')
-        if 4 in f: result['type']      = f[4][0][1].decode('utf-8', errors='ignore')
-        #if 3 in f: result['sku']       = f[3][0][1].decode('utf-8', errors='ignore')
-        #if 4 in f: result['type']      = f[4][0][1].decode('utf-8', errors='ignore')
-        if 8 in f: result['diameter']  = _fval(f, 8)
-        if 11 in f: result['total']    = _fval(f, 11)
-        if 12 in f: result['rfid']     = _fval(f, 12)
-        return result
-
-    def _check_auto_feed(self):
-        slots = self._info.get('slots', [])
-        if not slots:
+    def _dispatch(self, cmd, payload, decoder, callback):
+        if not self._connected or not self._serial:
             return
-        ace_is_busy = any(s.get('status') in ('feeding', 'preload') for s in slots)
-
-        for i in range(min(len(slots), 4)):
-            current_status = slots[i].get('status')
-
-            if current_status == 'empty':
-                if self._last_filament_status[i] != 'empty':
-                    self.clear_slot_rfid_info(i)
-                    logging.info("ACE: Slot %d empty.", i)
-                self.auto_feed_step[i] = 0
-                self.feed_sent[i] = False
-                self._last_filament_status[i] = 'empty'
-                continue
-
-            if self.auto_feed_step[i] == 0:
-                prev_status = self._last_filament_status[i]
-                if prev_status == 'preload' and current_status == 'ready':
-                    if not self.enable_feeder_mode:
-                        self.auto_feed_step[i] = 2
-                        self.feed_sent[i] = True
-                    else:
-                        logging.info("ACE: Slot %d trigger. Entering Incremental Feed", i)
-                        self.auto_feed_step[i] = 1
-                        self.feed_sent[i] = False
-
-            elif self.auto_feed_step[i] == 1:
-                if self.port_sensor_hit[i]:
-                    logging.info("ACE: Slot %d SENSOR HIT! Moving to Seating", i)
-                    self.send_request(
-                        cmd=Cmd.STOP_FEED_OR_ROLLBACK,
-                        payload=pb_uint32(1, i),
-                        callback=None)
-                    self.auto_feed_step[i] = 2
-                    self.feed_sent[i] = False
-
-                elif self.feed_sent[i] and current_status == 'ready' and not ace_is_busy:
-                    logging.warning("ACE: Slot %d move completed. Advancing to seating.", i)
-                    self.auto_feed_step[i] = 2
-                    self.feed_sent[i] = False
-
-                elif current_status == 'ready' and not self.feed_sent[i] and not ace_is_busy:
-                    logging.info("ACE: Slot %d - Motor is free. Sending feed command.", i)
-                    self.send_request(
-                        cmd=Cmd.FEED_OR_ROLLBACK,
-                        payload=(pb_uint32(1, i)
-                                 + pb_uint32(2, self.feed_speed)
-                                 + pb_uint32(3, self.feed_lengths[i])
-                                 + pb_uint32(4, FEED_MODE_FORWARD)),
-                        callback=None)
-                    if not self.enable_feeder_mode:
-                        self.feed_sent[i] = True
-                        ace_is_busy = True
-
-            elif self.auto_feed_step[i] == 2:
-                if not ace_is_busy:
-                    logging.info("ACE: Slot %d performing final seating move.", i)
-                    self._do_seating_move(i)
-                    self.auto_feed_step[i] = 3
-                    ace_is_busy = True
-
-            elif self.auto_feed_step[i] == 3:
-                if current_status == 'ready':
-                    self.auto_feed_step[i] = 0
-
-            self._last_filament_status[i] = current_status
-
-    def _do_seating_move(self, i):
-        if not self.enable_feeder_mode:
-            logging.debug("ACE: Slot %d move finished", i)
-            self.set_slot_rfid_info(i)
-            return
-        if self.port_sensor_hit[i]:
-            logging.info(
-                "ACE: Slot %d sensor hit. Sending seating move at %d mm/s.", i, self.load_speed)
-            self.send_request(
-                cmd=Cmd.FEED_OR_ROLLBACK,
-                payload=(pb_uint32(1, i)
-                         + pb_uint32(2, self.load_speed)
-                         + pb_uint32(3, self.load_lengths[i])
-                         + pb_uint32(4, FEED_MODE_FORWARD)),
-                callback=None)
-        else:
-            logging.warning(
-                "ACE: Slot %d primary move finished but Printer %d sensor is EMPTY.", i, i)
-
-    def _handle_status_update(self, response_payload: bytes):
-        self._info = self._parse_status_response(response_payload)
-        self._check_auto_feed()
+        seq = self._next_seq()
+        self._callback_map[seq] = (callback, decoder)
+        if cmd in (_CMD_FEED_OR_ROLLBACK, _CMD_STOP_FEED_OR_ROLLBACK):
+            logging.info("ACE: tx cmd=0x%02X seq=%d payload=%s",
+                         cmd, seq, payload.hex() or '<empty>')
+        try:
+            self._serial.write(_build_packet(cmd, payload, seq=seq))
+        except Exception as e:
+            logging.error("ACE: write failed: %s", e)
+            self._callback_map.pop(seq, None)
+            self._connected = False
 
     def _writer(self):
         while self._connected:
             try:
-                try:
-                    cmd, payload, cb = self._queue.get_nowait()
-                except queue.Empty:
-                    cmd     = Cmd.GET_STATUS
-                    payload = b''
-                    cb      = self._handle_status_update
-
-                seq = self._next_seq()
-                with self._cb_lock:
-                    self._callback_map[seq] = cb
-                self._send_packet(cmd, payload, seq)
+                if not self._queue.empty():
+                    task = self._queue.get()
+                    if task:
+                        cmd, payload, decoder, cb = task
+                        self._dispatch(cmd, payload, decoder, cb)
+                else:
+                    self._dispatch(_CMD_GET_STATUS, b'',
+                                   _decode_status, self._handle_status_update)
                 time.sleep(0.5)
             except Exception as e:
-                logging.error("ACE Writer error: %s", e)
+                logging.error("ACE: writer error: %s", e)
                 time.sleep(0.5)
 
     def _reader(self):
-        buf = bytearray()
         while self._connected:
             try:
-                chunk = self._serial.read(256)
-                if chunk:
-                    buf.extend(chunk)
-                    while len(buf) > 4:
-                        pkt, n = _parse_packet(buf)
-                        if n > 0:
-                            buf = buf[n:]
-                        else:
-                            break
-                        if pkt and pkt.get('is_resp'):
-                            seq = pkt['seq']
-                            with self._cb_lock:
-                                callback = self._callback_map.pop(seq, None)
-                            if callback is not None:
-                                callback(pkt['payload'])
-            except serial.SerialException as e:
-                logging.error("ACE: Serial read error: %s", e)
-                self._connected = False
-                break
+                n = self._serial.in_waiting
+                if n:
+                    self._rx_buf.extend(self._serial.read(n))
+                else:
+                    time.sleep(0.02)
+                if not self._rx_buf:
+                    continue
+                packets, self._rx_buf = _parse_stream(self._rx_buf)
+                for p in packets:
+                    if not p['is_resp']:
+                        continue
+                    entry = self._callback_map.pop(p['seq'], None)
+                    if not entry:
+                        continue
+                    callback, decoder = entry
+                    try:
+                        response = decoder(p['payload']) if decoder else {'code': 0, 'msg': ''}
+                    except Exception as e:
+                        logging.error("ACE: decode error cmd=0x%02X: %s", p['cmd'], e)
+                        response = {'code': 0, 'msg': ''}
+                    response['id'] = p['seq']
+                    if callback:
+                        try:
+                            callback(self, response)
+                        except Exception as e:
+                            logging.error("ACE: callback error: %s\n%s", e, traceback.format_exc())
             except Exception as e:
-                logging.error("ACE: Unexpected reader error: %s", e)
+                logging.error("ACE: reader error: %s", e)
                 time.sleep(0.1)
 
-    def dwell(self, delay):
-        toolhead = self.printer.lookup_object('toolhead')
-        toolhead.dwell(delay)
+    def _handle_status_update(self, _ace_ref, response):
+        if 'result' not in response:
+            return
+        self._info = response['result']
+        slots = self._info.get('slots') or []
+        for i, slot in enumerate(slots[:4]):
+            st   = slot.get('status')
+            prev = self._last_logged_slot_status[i]
+            if st != prev:
+                logging.info("ACE: slot[%d] %s -> %s (rfid=%s)", i, prev, st, slot.get('rfid'))
+                self._last_logged_slot_status[i] = st
+                if i in self._retract_in_progress and st in ('empty', 'ready'):
+                    logging.info("ACE: slot %d retract complete", i)
+                    self._retract_in_progress.discard(i)
+                if st == 'assist_error' and prev != 'assist_error':
+                    self._handle_assist_error(i)
+                elif st in ACE_ERROR_STATUSES and prev not in ACE_ERROR_STATUSES:
+                    self._handle_slot_error(i, st)
+                elif i in self._assist_active_slots and st in _STATES_INCOMPATIBLE_WITH_ASSIST:
+                    logging.info("ACE: slot[%d] dropped assist (status=%s)", i, st)
+                    self._clear_assist_tracking(i)
+        self._check_auto_feed()
+
+    def update_sensors(self, eventtime):
+        for i in range(4):
+            s = self.printer.lookup_object('filament_motion_sensor e%d_filament' % i, None)
+            self.port_sensor_hit[i] = (s.get_status(eventtime).get('filament_detected', False)
+                                       if s is not None else False)
+
+    def get_sensor_state(self, index, eventtime):
+        s = self.printer.lookup_object('filament_motion_sensor e%d_filament' % index, None)
+        return s.get_status(eventtime).get('filament_detected', False) if s else False
+
+    def _get_extruder_velocity(self):
+        mr = self.printer.lookup_object('motion_report', None)
+        if mr is None: return 0.0
+        try:
+            v = mr.get_status(self.reactor.monotonic()).get('live_extruder_velocity', 0.0)
+            return float(v) if v is not None else 0.0
+        except: return 0.0
+
+    def _resolve_active_extruder_index(self, eventtime):
+        th = self.printer.lookup_object('toolhead', None)
+        if th is None: return None
+        try: name = th.get_status(eventtime).get('extruder', '')
+        except: return None
+        if not name or not name.startswith('extruder'): return None
+        suffix = name[8:]
+        if suffix == '': return 0
+        return int(suffix) if suffix.isdigit() else None
+
+    def _filament_feed_active(self, idx=None):
+        fd = self.printer.lookup_object('filament_detect', None)
+        if fd is None: return False
+        for _, f_obj in getattr(fd, 'filament_feed_objects', None) or []:
+            states = getattr(f_obj, 'channel_state', None) or []
+            for ch in range(len(states)):
+                try:
+                    if idx is not None and f_obj.filament_ch[ch] != idx: continue
+                    stage = str(states[ch])
+                except: continue
+                if not any(stage.startswith(p) for p in _FF_ACTIVE_PREFIXES): continue
+                if stage.endswith('_finish') or stage.endswith('_fail'): continue
+                return True
+        return False
+
+    def _assist_log_cb(self, label, idx):
+        def _cb(_ace_ref, resp):
+            if not resp: return
+            code = resp.get('code')
+            if code: logging.warning("ACE: %s slot=%d FAILED code=%s", label, idx, code)
+            else:    logging.info("ACE: %s slot=%d ack", label, idx)
+        return _cb
+
+    def _start_feed_assist(self, idx, why=''):
+        logging.info("ACE: -> start_feed_assist slot=%d (%s)", idx, why)
+        self._assist_active_slots.add(idx)
+        self._assist_mode_per_slot[idx] = 'feed'
+        def _cb(_a, resp):
+            if not resp: return
+            if resp.get('code'): logging.warning("ACE: start_feed_assist slot=%d FAILED", idx)
+            else:                logging.info("ACE: start_feed_assist slot=%d ack", idx)
+        self._send(_CMD_FEED_OR_ROLLBACK,
+                   _pb_uint32(1, idx) + _pb_uint32(2, _FEED_ASSIST_SPEED) + _pb_uint32(3, 0) + _pb_uint32(4, _FEED_MODE_FEED_ASSIST),
+                   _decode_generic, _cb)
+
+    def _stop_feed_assist(self, idx, why=''):
+        logging.info("ACE: -> stop_feed_assist slot=%d (%s)", idx, why)
+        self._clear_assist_tracking(idx)
+        self._send(_CMD_STOP_FEED_OR_ROLLBACK, _pb_uint32(1, idx),
+                   _decode_generic, self._assist_log_cb('stop_feed_assist', idx))
+        if self.assist_stop_retract_length > 0:
+            self._send(_CMD_FEED_OR_ROLLBACK,
+                       _pb_uint32(1, idx) + _pb_uint32(2, self.retract_speed) + _pb_uint32(3, self.assist_stop_retract_length) + _pb_uint32(4, _FEED_MODE_ROLLBACK),
+                       _decode_generic, None)
+
+    def _start_unwind_assist(self, idx, why=''):
+        logging.info("ACE: -> start_unwind_assist slot=%d (%s)", idx, why)
+        self._assist_active_slots.add(idx)
+        self._assist_mode_per_slot[idx] = 'unwind'
+        def _cb(_a, resp):
+            if not resp: return
+            if resp.get('code'): logging.warning("ACE: unwind_assist slot=%d FAILED", idx)
+            else:                logging.info("ACE: unwind_assist slot=%d ack", idx)
+        self._send(_CMD_FEED_OR_ROLLBACK,
+                   _pb_uint32(1, idx) + _pb_uint32(2, _UNWIND_ASSIST_SPEED) + _pb_uint32(3, 0) + _pb_uint32(4, _FEED_MODE_UNWIND_ASSIST),
+                   _decode_generic, _cb)
+
+    def _clear_assist_tracking(self, idx):
+        self._assist_active_slots.discard(idx)
+        self._assist_mode_per_slot.pop(idx, None)
+        self._pending_mode_switch.pop(idx, None)
+        self._last_extrusion_times.pop(idx, None)
+
+    def _start_retract(self, idx):
+        logging.info("ACE: retract slot=%d (%dmm @ %dmm/s)", idx, self.retract_lengths[idx], self.retract_speed)
+        self._retract_in_progress.add(idx)
+        self._send(_CMD_FEED_OR_ROLLBACK,
+                   _pb_uint32(1, idx) + _pb_uint32(2, self.retract_speed) + _pb_uint32(3, self.retract_lengths[idx]) + _pb_uint32(4, _FEED_MODE_ROLLBACK),
+                   _decode_generic, None)
+        self._clear_assist_tracking(idx)
+
+    def _assist_loop_eval(self, eventtime):
+        if not self._connected:
+            return eventtime + 0.25
+        velocity = self._get_extruder_velocity()
+        abs_vel  = abs(velocity)
+        idx      = self._resolve_active_extruder_index(eventtime)
+        if idx is None or idx < 0 or idx > 3:
+            return eventtime + 0.25
+        for s in list(self._assist_active_slots):
+            last_t = self._last_extrusion_times.get(s, 0.0)
+            if (not self._printing and last_t > 0
+                    and eventtime - last_t > self.feed_assist_idle_timeout
+                    and not self._filament_feed_active(s)):
+                self._stop_feed_assist(s, why='idle_timeout')
+        if abs_vel < _VELOCITY_IDLE_THRESHOLD:
+            self._pending_mode_switch.pop(idx, None)
+            return eventtime + 0.25
+        self._last_extrusion_times[idx] = eventtime
+        target_mode = 'feed' if velocity > 0 else 'unwind'
+        if target_mode == 'unwind' and self._printing:
+            target_mode = 'feed'
+        self._ensure_assist_mode(idx, target_mode, abs_vel, eventtime)
+        return eventtime + 0.25
+
+    def _ensure_assist_mode(self, idx, target, target_velocity, eventtime):
+        slots = (self._info or {}).get('slots') or []
+        slot_status = slots[idx].get('status') if idx < len(slots) else None
+        if slot_status in ('feeding', 'rollback', 'empty') or slot_status in ACE_ERROR_STATUSES:
+            return
+        current_mode = self._assist_mode_per_slot.get(idx)
+        in_set       = idx in self._assist_active_slots
+        if in_set and current_mode == target:
+            self._pending_mode_switch.pop(idx, None)
+            return
+        if in_set and current_mode is not None and current_mode != target:
+            pending = self._pending_mode_switch.get(idx)
+            if pending is None or pending['target'] != target:
+                self._pending_mode_switch[idx] = {'target': target, 'since': eventtime}
+                return
+            if eventtime - pending['since'] < self.assist_mode_confirm_time:
+                return
+            logging.info("ACE: mode switch slot=%d %s->%s confirmed", idx, current_mode, target)
+            self._stop_feed_assist(idx, why='switch_%s_to_%s' % (current_mode, target))
+            self._pending_mode_switch.pop(idx, None)
+        if target == 'feed':
+            self._start_feed_assist(idx, why='loop_v=+%.1fmms' % target_velocity)
+        else:
+            self._start_unwind_assist(idx, why='loop_v=-%.1fmms' % target_velocity)
+
+    def _handle_assist_error(self, idx):
+        self._clear_assist_tracking(idx)
+        mode = 'unwind' if self._get_extruder_velocity() < 0 and not self._printing else 'feed'
+        logging.info("ACE: slot %d assist_error -> restarting as %s", idx, mode)
+        if mode == 'feed': self._start_feed_assist(idx, why='assist_error_restart')
+        else:              self._start_unwind_assist(idx, why='assist_error_restart')
+
+    def _handle_slot_error(self, idx, kind):
+        msg = "ACE slot %d %s -- aborting" % (idx, kind)
+        logging.error(msg)
+        self._clear_assist_tracking(idx)
+        self._active_feeds.discard(idx)
+        self._feed_start_times.pop(idx, None)
+        self._retract_in_progress.discard(idx)
+        self._send(_CMD_STOP_FEED_OR_ROLLBACK, _pb_uint32(1, idx), _decode_generic, None)
+        self.reactor.register_async_callback(
+            lambda e, m=msg, i=idx, k=kind: self._raise_ace_error_async(m, i, k))
+
+    _FILAMENT_FAIL_PREFIXES = (
+        ('load_', 'load_fail'), ('unload_', 'unload_fail'),
+        ('preload_', 'preload_fail'), ('manual_sta_', 'manual_sta_fail'),
+    )
+
+    def _abort_filament_op(self, idx):
+        fd = self.printer.lookup_object('filament_detect', None)
+        if fd is None: return False
+        aborted = False
+        for obj_name, f_obj in getattr(fd, 'filament_feed_objects', None) or []:
+            ch_count = len(getattr(f_obj, 'channel_state', []) or [])
+            for ch in range(ch_count):
+                try:
+                    if f_obj.filament_ch[ch] != idx: continue
+                    stage = str(f_obj.channel_state[ch])
+                except: continue
+                fail_state = next((t for p, t in self._FILAMENT_FAIL_PREFIXES
+                                   if stage.startswith(p) and not stage.endswith('_fail')), None)
+                if fail_state is None: continue
+                try:
+                    if hasattr(f_obj, 'channel_error') and f_obj.channel_error[ch] in (None, '', 'ok'):
+                        f_obj.channel_error[ch] = 'general'
+                    if hasattr(f_obj, 'channel_error_state'):
+                        f_obj.channel_error_state[ch] = f_obj.channel_state[ch]
+                    if hasattr(f_obj, '_set_channel_state'):
+                        f_obj._set_channel_state(ch, fail_state, True)
+                    else:
+                        f_obj.channel_state[ch] = fail_state
+                    aborted = True
+                    logging.info("ACE: forced %s ch=%d -> %s for slot %d", obj_name, ch, fail_state, idx)
+                except Exception as e:
+                    logging.error("ACE: abort op failed slot %d: %s", idx, e)
+        return aborted
+
+    def _raise_ace_error_async(self, msg, idx, kind):
+        self._abort_filament_op(idx)
+        short = "ACE slot %d %s" % (idx, kind)
+        ds = self.printer.lookup_object('display_status', None)
+        if ds:
+            try: ds.message = short
+            except: pass
+        try: self.gcode.run_script_from_command("M117 %s" % short)
+        except: pass
+        try: self.gcode.respond_raw("!! %s" % msg)
+        except: pass
+        ps = self.printer.lookup_object('print_stats', None)
+        if ps:
+            try:
+                if ps.get_status(self.reactor.monotonic()).get('state') == 'printing':
+                    self.gcode.run_script_from_command('PAUSE')
+            except: pass
+
+    def _main_eval(self, eventtime):
+        ps = self.printer.lookup_object('print_stats', None)
+        if ps is not None:
+            stats = ps.get_status(eventtime)
+            current_state = stats.get('state')
+            current_layer = ps.info_current_layer
+            progress = 0.0
+            if current_layer is None:
+                vsd = self.printer.lookup_object('virtual_sdcard', None)
+                if vsd:
+                    progress = vsd.get_status(eventtime).get('progress', 0)
+            if current_layer is None:
+                current_layer = 0
+            if current_state == "printing" and (current_layer > 0 or progress > 0.0):
+                th = self.printer.lookup_object('toolhead', None)
+                if th:
+                    active_name = th.get_status(eventtime).get('extruder')
+                    new_idx = 0
+                    if active_name and active_name.startswith('extruder'):
+                        num_part = active_name[8:]
+                        new_idx = int(num_part) if num_part.isdigit() else 0
+                    if active_name != self._last_active_tool:
+                        logging.info("ACE: extruder %s->%s (idx %s->%s)",
+                                     self._last_active_tool, active_name,
+                                     self._last_active_index, new_idx)
+                        self._last_active_tool  = active_name
+                        self._last_active_index = new_idx
+                        for s in list(self._assist_active_slots):
+                            if s != new_idx:
+                                self._stop_feed_assist(s, why='extruder_switch_to_%d' % new_idx)
+                        if new_idx not in self._assist_active_slots:
+                            self._start_feed_assist(new_idx, why='extruder_switch')
+                return eventtime + 0.25
+
+        feeds_to_remove = []
+        for idx in self._active_feeds:
+            if self.get_sensor_state(idx, eventtime):
+                logging.info("ACE: sensor hit slot %d", idx)
+                self._send(_CMD_STOP_FEED_OR_ROLLBACK, _pb_uint32(1, idx), _decode_generic, None)
+                self._clear_assist_tracking(idx)
+                feeds_to_remove.append(idx)
+            elif eventtime > self._feed_start_times.get(idx, 0) + self._timeout_threshold:
+                logging.warning("ACE: feed slot %d TIMEOUT", idx)
+                self._send(_CMD_STOP_FEED_OR_ROLLBACK, _pb_uint32(1, idx), _decode_generic, None)
+                self._clear_assist_tracking(idx)
+                feeds_to_remove.append(idx)
+        for idx in feeds_to_remove:
+            self._active_feeds.discard(idx)
+            self._feed_start_times.pop(idx, None)
+
+        self.update_sensors(eventtime)
+
+        msm = self.printer.lookup_object('machine_state_manager', None)
+        fd  = self.printer.lookup_object('filament_detect', None)
+
+        if msm is not None and fd is not None:
+            msm_status  = msm.get_status()
+            action_code = msm_status.get('action_code')
+
+            if not hasattr(self, '_processed_extruders'):
+                self._processed_extruders  = set()
+                self._last_f_stages        = {}
+                self._prev_channel_stages  = {}
+                self._last_action          = action_code
+                self._allow_triggers       = False
+                logging.info("ACE: system initialised. Triggers locked until action change.")
+
+            if action_code != self._last_action:
+                logging.info("ACE: action changed to %s", action_code)
+                self._allow_triggers = True
+                self._last_action    = action_code
+
+            for obj_name, f_obj in getattr(fd, 'filament_feed_objects', []):
+                for ch in range(2):
+                    actual_stage      = str(f_obj.channel_state[ch])
+                    assigned_extruder = f_obj.filament_ch[ch]
+                    state_key         = "%s_%d" % (obj_name, ch)
+                    last_stage        = self._last_f_stages.get(state_key)
+
+                    if actual_stage != last_stage:
+                        logging.info("ACE: %s Ch %d | %s -> %s | ext=%s",
+                                     obj_name, ch, last_stage, actual_stage, assigned_extruder)
+                        if assigned_extruder is not None:
+                            self._processed_extruders.discard("%d_%s" % (int(assigned_extruder), last_stage))
+                        self._prev_channel_stages[state_key] = last_stage
+                        self._last_f_stages[state_key]       = actual_stage
+
+                    is_preload = actual_stage == "preload_finish"
+                    if assigned_extruder is None or not (self._allow_triggers or is_preload):
+                        continue
+
+                    idx      = int(assigned_extruder)
+                    gate_key = "%d_%s" % (idx, actual_stage)
+                    if gate_key in self._processed_extruders:
+                        continue
+
+                    if actual_stage == "unload_finish":
+                        logging.info("ACE: unload_finish slot=%d -> retract", idx)
+                        if idx in self._assist_active_slots:
+                            self._stop_feed_assist(idx, why='unload_finish')
+                        self._start_retract(idx)
+                        self._processed_extruders.add(gate_key)
+
+                    elif actual_stage == "unload_fail":
+                        logging.info("ACE: unload_fail slot=%d", idx)
+                        if idx in self._assist_active_slots:
+                            self._stop_feed_assist(idx, why='unload_fail')
+                        self._retract_in_progress.discard(idx)
+                        self._processed_extruders.add(gate_key)
+
+                    elif actual_stage == "load_feeding":
+                        logging.info("ACE: load_feeding slot=%d", idx)
+                        if not self.get_sensor_state(idx, eventtime):
+                            self._send(_CMD_FEED_OR_ROLLBACK, _pb_uint32(1, idx) + _pb_uint32(2, self.load_speed) + _pb_uint32(3, 3000) + _pb_uint32(4, _FEED_MODE_FEED), _decode_generic, None)
+                            self._clear_assist_tracking(idx)
+                            self._feed_start_times[idx] = eventtime
+                            self._active_feeds.add(idx)
+                        else:
+                            self._send(_CMD_STOP_FEED_OR_ROLLBACK, _pb_uint32(1, idx), _decode_generic, None)
+                            self._clear_assist_tracking(idx)
+                        self._processed_extruders.add(gate_key)
+
+                    elif actual_stage == "load_fail":
+                        logging.info("ACE: load_fail slot=%d", idx)
+                        self._send(_CMD_STOP_FEED_OR_ROLLBACK, _pb_uint32(1, idx), _decode_generic, None)
+                        self._clear_assist_tracking(idx)
+                        self._active_feeds.discard(idx)
+                        self._feed_start_times.pop(idx, None)
+                        self._processed_extruders.add(gate_key)
+
+                    elif actual_stage == "load_finish":
+                        logging.info("ACE: load_finish slot=%d", idx)
+                        self._send(_CMD_STOP_FEED_OR_ROLLBACK, _pb_uint32(1, idx), _decode_generic, None)
+                        self._clear_assist_tracking(idx)
+                        self._active_feeds.discard(idx)
+                        self._feed_start_times.pop(idx, None)
+                        self._processed_extruders.add(gate_key)
+
+                    elif actual_stage == "preload_finish":
+                        prev = self._prev_channel_stages.get(state_key) or ''
+                        is_post_unload = (prev.startswith('unload_')
+                                          and not prev.endswith('_finish')
+                                          and not prev.endswith('_fail'))
+                        if is_post_unload:
+                            logging.info("ACE: post-unload preload_finish (prev=%s) -> retract slot=%d", prev, idx)
+                            if idx in self._assist_active_slots:
+                                self._stop_feed_assist(idx, why='post_unload_preload')
+                            self._start_retract(idx)
+                        else:
+                            logging.info("ACE: preload_finish slot=%d -> rfid", idx)
+                            self.set_slot_rfid_info(idx)
+                        self._processed_extruders.add(gate_key)
+
+        return eventtime + 0.25
+
+    def _check_auto_feed(self):
+        slots = self._info.get('slots', [])
+        if not slots: return
+        ace_is_busy = any(s.get('status') in ['feeding', 'preload'] for s in slots)
+        for i in range(min(len(slots), 4)):
+            current_status = slots[i].get('status')
+            if current_status == 'empty':
+                if self._last_filament_status[i] != 'empty':
+                    self.clear_slot_rfid_info(i)
+                    logging.info("ACE: slot %d empty", i)
+                self.auto_feed_step[i] = 0
+                self._last_filament_status[i] = 'empty'
+                continue
+            if self.auto_feed_step[i] == 0:
+                if self._last_filament_status[i] == 'preload' and current_status == 'ready':
+                    if not ace_is_busy:
+                        self._clear_assist_tracking(i)
+                        self._feed_start_times[i] = eventtime
+                        self._active_feeds.add(i)
+                        self.auto_feed_step[i] = 2
+                        ace_is_busy = True
+            elif self.auto_feed_step[i] == 2:
+                if not ace_is_busy:
+                    logging.info("ACE: slot %d set rfid", i)
+                    self.set_slot_rfid_info(i)
+                    self.auto_feed_step[i] = 3; ace_is_busy = True
+            elif self.auto_feed_step[i] == 3:
+                if current_status == 'ready':
+                    self.auto_feed_step[i] = 0
+            self._last_filament_status[i] = current_status
 
     def set_slot_rfid_info(self, index):
-        def _callback(payload: bytes):
-            if not payload:
+        def _callback(_ace_ref, resp):
+            if not resp or 'result' not in resp:
                 return
-
-            s = self._parse_filament_info_response(payload)
-
+            s = resp['result']
+            logging.info("ACE: filament_info slot=%d sku=%s type=%s brand=%s "
+                         "diameter=%s color=%s total=%s remainder=%s rfid=%s",
+                         index, s.get('sku'), s.get('type'), s.get('brand'),
+                         s.get('diameter'), s.get('color'), s.get('total'),
+                         s.get('remainder'), s.get('rfid'))
             if s.get('rfid', 1) != 2:
                 return
-
-            sku    = s.get('sku', '')
-            f_type = s.get('type', '')
-            brand  = s.get('brand', '')
-            
+            sku        = s.get('sku', '') or ''
+            f_type     = s.get('type', '') or ''
+            brand      = s.get('brand', '') or ''
             color_list = s.get('color', [0, 0, 0])
-
-            r, g, b = color_list[0], color_list[1], color_list[2]
+            colors_raw = s.get('colors', [[0, 0, 0, 255]])
+            r, g, b    = color_list[0], color_list[1], color_list[2]
             rgb_packed  = "%02X%02X%02X" % (r, g, b)
             rgb_ipacked = (r << 16) | (g << 8) | b
-            colors_raw  = s.get('colors', [[0, 0, 0, 255]])
             alpha       = colors_raw[0][3] if colors_raw and len(colors_raw[0]) > 3 else 255
             alpha_hex   = "%02X" % alpha
-            filament_detect = self.printer.lookup_object('filament_detect', None)
-
             if brand.lower() == "ac":
-                filament_info = f_type.split(" ", 1)
-                f_type = filament_info[0]
-                brand  = filament_info[1] if len(filament_info) > 1 else ""
+                parts  = f_type.split(" ", 1)
+                f_type = parts[0]
+                brand  = parts[1] if len(parts) > 1 else ""
                 sku    = "Anycubic"
-
             if self.force_generic or self.check_rfid_status():
                 if sku.lower() != "snapmaker":
                     sku = "Generic"
-
             if sku.lower() != "snapmaker" and brand.lower() == "basic":
                 brand = ""
-
-            if filament_detect is None:
-                command = (
-                    f"SET_PRINT_FILAMENT_CONFIG "
-                    f"CONFIG_EXTRUDER={index} "
-                    f"VENDOR='{sku}' "
-                    f"FILAMENT_TYPE='{f_type}' "
-                    f"FILAMENT_SUBTYPE='{brand}' "
-                    f"FILAMENT_COLOR_RGBA={rgb_packed}{alpha_hex}")
-                self.gcode.run_script_from_command(command)
+            fd = self.printer.lookup_object('filament_detect', None)
+            if fd is None:
+                self.gcode.run_script_from_command(
+                    "SET_PRINT_FILAMENT_CONFIG CONFIG_EXTRUDER=%d "
+                    "VENDOR='%s' FILAMENT_TYPE='%s' FILAMENT_SUBTYPE='%s' "
+                    "FILAMENT_COLOR_RGBA=%s%s"
+                    % (index, sku, f_type, brand, rgb_packed, alpha_hex))
             else:
-                length_map = {330: 1000, 247: 750, 198: 600, 165: 500, 82: 250}
-                total_len  = s.get('total')
+                lm = {330: 1000, 247: 750, 198: 600, 165: 500, 82: 250}
+                total_len = s.get('total')
                 info = copy.deepcopy(filament_protocol.FILAMENT_INFO_STRUCT)
                 info['VERSION']    = 1
                 info['VENDOR']     = sku
@@ -799,56 +1007,46 @@ class AceDevice:
                 info['SUB_TYPE']   = brand
                 info['COLOR_NUMS'] = 1
                 info['RGB_1']      = rgb_ipacked
-                try:
-                    info['ALPHA'] = max(0x00, min(0xFF, int(alpha)))
-                except (ValueError, TypeError):
-                    info['ALPHA'] = 0xFF
-                info['ARGB_COLOR'] = info['ALPHA'] << 24 | info['RGB_1']
-                info['OFFICIAL']   = True
-                info['LENGTH']     = total_len
-                try:
-                    info['DIAMETER'] = int(round(float(s.get('diameter', 1.75)) * 100))
-                except (ValueError, TypeError):
-                    info['DIAMETER'] = 175
-                try:
-                    info['WEIGHT'] = int(length_map.get(total_len, 1000))
-                except (ValueError, TypeError):
-                    info['WEIGHT'] = 1000
+                try:    info['ALPHA'] = max(0x00, min(0xFF, int(alpha)))
+                except: info['ALPHA'] = 0xFF
+                info['ARGB_COLOR']       = info['ALPHA'] << 24 | info['RGB_1']
+                info['OFFICIAL']         = True
+                info['LENGTH']           = total_len
+                try:    info['DIAMETER'] = int(round(float(s.get('diameter', 1.75)) * 100))
+                except: info['DIAMETER'] = 175
+                try:    info['WEIGHT']   = int(lm.get(total_len, 1000))
+                except: info['WEIGHT']   = 1000
                 try:
                     info['HOTEND_MIN_TEMP'] = int(s.get('extruder_temp', {}).get('min', 190))
                     info['HOTEND_MAX_TEMP'] = int(s.get('extruder_temp', {}).get('max', 220))
-                except (ValueError, TypeError):
+                except:
                     info['HOTEND_MIN_TEMP'] = 0
                     info['HOTEND_MAX_TEMP'] = 0
                 try:
-                    bed_min_temp = int(s.get('hotbed_temp', {}).get('min', 50))
-                    bed_max_temp = int(s.get('hotbed_temp', {}).get('max', 60))
-                    info['BED_TEMP'] = bed_min_temp if bed_min_temp > 0 else bed_max_temp
-                except (ValueError, TypeError):
-                    info['BED_TEMP'] = 0
+                    bmin = int(s.get('hotbed_temp', {}).get('min', 50))
+                    bmax = int(s.get('hotbed_temp', {}).get('max', 60))
+                    info['BED_TEMP'] = bmin if bmin > 0 else bmax
+                except: info['BED_TEMP'] = 0
                 info['FIRST_LAYER_TEMP'] = info['HOTEND_MIN_TEMP']
                 info['OTHER_LAYER_TEMP'] = info['HOTEND_MIN_TEMP']
                 info['MF_DATE']  = datetime.now().strftime("%Y%m%d")
                 info['CARD_UID'] = [random.randint(0, 255) for _ in range(7)]
-                filament_detect._filament_info_update(index, info, is_clear=True)
-
-        self.send_request(
-            cmd=Cmd.GET_FILAMENT_INFO,
-            payload=pb_uint32(1, index),
-            callback=_callback)
+                fd._filament_info_update(index, info, is_clear=True)
+        self._send(_CMD_GET_FILAMENT_INFO, _pb_uint32(1, index),
+                   _decode_filament_info, _callback)
 
     def clear_slot_rfid_info(self, index):
-        filament_detect = self.printer.lookup_object('filament_detect', None)
-        if filament_detect is None:
-            command = (
-                f"SET_PRINT_FILAMENT_CONFIG CONFIG_EXTRUDER={index} "
-                f"VENDOR='' FILAMENT_TYPE='' FILAMENT_SUBTYPE='' FILAMENT_COLOR_RGBA=000000FF")
-            self.gcode.run_script_from_command(command)
+        fd = self.printer.lookup_object('filament_detect', None)
+        if fd is None:
+            self.gcode.run_script_from_command(
+                "SET_PRINT_FILAMENT_CONFIG CONFIG_EXTRUDER=%d "
+                "VENDOR='' FILAMENT_TYPE='' FILAMENT_SUBTYPE='' "
+                "FILAMENT_COLOR_RGBA=000000FF" % index)
         else:
             info = copy.deepcopy(filament_protocol.FILAMENT_INFO_STRUCT)
-            filament_detect._filament_info_update(index, info, is_clear=True)
+            fd._filament_info_update(index, info, is_clear=True)
 
-    cmd_ACE_START_DRYING_help = 'Start ACE filament dryer'
+    cmd_ACE_START_DRYING_help = 'Start ACE 2 Pro filament dryer'
     def cmd_ACE_START_DRYING(self, gcmd):
         temperature = gcmd.get_int('TEMPERATURE')
         duration    = gcmd.get_int('DURATION', 240)
@@ -856,93 +1054,136 @@ class AceDevice:
             raise gcmd.error('Wrong duration')
         if temperature <= 0 or temperature > self.max_dryer_temp:
             raise gcmd.error('Wrong temperature')
-        def callback(payload: bytes):
-            f = pb_decode(payload) if payload else {}
-            code = _fval(f, 1, 0)
-            if code != 0:
-                raise gcmd.error("ACE Error code: %d" % code)
-            self.gcode.respond_info(
-                'Started ACE drying at %d°C for %d minutes' % (temperature, duration))
-        self.send_request(
-            cmd=Cmd.DRYING,
-            payload=(pb_uint32(1, temperature)
-                     + pb_uint32(2, duration)
-                     + pb_bool(3, True)),
-            callback=callback)
+        def callback(_ace_ref, response):
+            if 'code' in response and response['code'] != 0:
+                raise gcmd.error("ACE Error: " + response.get('msg', ''))
+            self.gcode.respond_info('Started ACE drying at %dC for %d min' % (temperature, duration))
+        self._send(_CMD_DRYING,
+                   _pb_uint32(1, temperature) + _pb_uint32(2, duration) + _pb_bool(3, True),
+                   _decode_generic, callback)
 
-    cmd_ACE_STOP_DRYING_help = 'Stop ACE filament dryer'
+    cmd_ACE_STOP_DRYING_help = 'Stop ACE 2 Pro filament dryer'
     def cmd_ACE_STOP_DRYING(self, gcmd):
-        def callback(payload: bytes):
-            f = pb_decode(payload) if payload else {}
-            code = _fval(f, 1, 0)
-            if code != 0:
-                raise gcmd.error("ACE Error code: %d" % code)
+        def callback(_ace_ref, response):
+            if 'code' in response and response['code'] != 0:
+                raise gcmd.error("ACE Error: " + response.get('msg', ''))
             self.gcode.respond_info('Stopped ACE drying')
-        self.send_request(
-            cmd=Cmd.DRYING,
-            payload=pb_uint32(1, 0) + pb_uint32(2, 0),
-            callback=callback)
+        self._send(_CMD_DRYING, _pb_uint32(1, 0) + _pb_uint32(2, 0), _decode_generic, callback)
+
+    cmd_ACE_GET_TEMP_help = 'Read ACE 2 Pro temperatures and humidity'
+    def cmd_ACE_GET_TEMP(self, gcmd):
+        if not self._connected:
+            gcmd.respond_info("ACE_GET_TEMP: not connected"); return
+        def callback(_ace, response):
+            if not response or 'result' not in response:
+                gcmd.respond_info("ACE_GET_TEMP: no response"); return
+            r = response['result']
+            gcmd.respond_info(
+                "ACE 2 Pro temperatures:\n"
+                "  Box 1: %.1f C    Box 2: %.1f C\n"
+                "  PTC 1: %.1f C    PTC 2: %.1f C\n"
+                "  Env:   %.1f C    Humidity: %.1f %%"
+                % (r.get('box1_temp', 0.0), r.get('box2_temp', 0.0),
+                   r.get('ptc1_temp', 0.0), r.get('ptc2_temp', 0.0),
+                   r.get('env_temp',  0.0), r.get('env_humidity', 0.0)))
+        self._send(_CMD_GET_TEMP, b'', _decode_temp, callback)
+
+    cmd_ACE_GET_STATUS_help = 'Snapshot of ACE 2 Pro status'
+    def cmd_ACE_GET_STATUS(self, gcmd):
+        lines = [
+            "ACE 2 Pro Status",
+            "  Device:    %s @ %d baud" % (self.serial_name, self.baud),
+            "  Connected: %s" % ('yes' if self._connected else 'no'),
+        ]
+        if not self._connected:
+            gcmd.respond_info("\n".join(lines)); return
+        info = self._info or {}
+        if not info:
+            lines.append("  (no status yet)")
+            gcmd.respond_info("\n".join(lines)); return
+        lines.append("  Work:      %s" % info.get('status', '?'))
+        lines.append("  Box temp:  %s C    Humidity: %s %%" % (
+            info.get('temp', '?'), info.get('humidity', '?')))
+        dryer = info.get('dryer_status') or {}
+        if dryer:
+            def _fmt(v):
+                try:
+                    s = int(v); h, r = divmod(s, 3600); m, sc = divmod(r, 60)
+                    return "%02d:%02d:%02d" % (h, m, sc)
+                except: return str(v)
+            lines.append("  Dryer: %s target=%s C dur=%s remain=%s"
+                         % (dryer.get('status','?'), dryer.get('target_temp','?'),
+                            _fmt(dryer.get('duration','?')),
+                            _fmt(dryer.get('remain_time','?'))))
+        rfid_names = {0:'empty', 1:'unknown', 2:'identified', 3:'identifying'}
+        lines += ["", "Slots:"]
+        for i in range(4):
+            slots = info.get('slots') or []
+            slot  = slots[i] if i < len(slots) else {}
+            row   = "  %d: status=%-12s rfid=%s" % (
+                i, slot.get('status','-'),
+                rfid_names.get(slot.get('rfid'), str(slot.get('rfid','-'))))
+            if i in self._assist_active_slots:
+                row += "  assist=%s" % self._assist_mode_per_slot.get(i, '?')
+            lines.append(row)
+        lines += ["", "Feed assist: enabled=%s  idle_timeout=%ss  active=%s"
+                  % (self.enable_feed_assist, self.feed_assist_idle_timeout,
+                     sorted(self._assist_active_slots) or '[]')]
+        gcmd.respond_info("\n".join(lines))
 
     cmd_SET_FILAMENT_CONFIG_help = 'Set filament information'
     def cmd_SET_FILAMENT_CONFIG(self, gcmd):
-        channel       = gcmd.get_int('CHANNEL')
-        vendor        = gcmd.get('VENDOR', '')
-        filament_type = gcmd.get('TYPE', '')
-        subtype       = gcmd.get('SUBTYPE', '')
-        color         = gcmd.get('COLOR', '000000')
-        alpha         = gcmd.get('ALPHA', 'FF')
-        official      = gcmd.get('OFFICIAL', 'false').lower()
-        length        = gcmd.get_int('LENGTH', 330)
-        diameter      = gcmd.get_int('DIAMETER', 175)
-        weight        = gcmd.get_int('WEIGHT', 1000)
+        channel           = gcmd.get_int('CHANNEL')
+        vendor            = gcmd.get('VENDOR', '')
+        filament_type     = gcmd.get('TYPE', '')
+        subtype           = gcmd.get('SUBTYPE', '')
+        color             = gcmd.get('COLOR', '000000')
+        alpha             = gcmd.get('ALPHA', 'FF')
+        official          = gcmd.get('OFFICIAL', 'false').lower()
+        length            = gcmd.get_int('LENGTH', 330)
+        diameter          = gcmd.get_int('DIAMETER', 175)
+        weight            = gcmd.get_int('WEIGHT', 1000)
         extruder_temp_min = gcmd.get_int('EXT_TEMP_MIN', 190)
         extruder_temp_max = gcmd.get_int('EXT_TEMP_MAX', 220)
         hotbed_temp_min   = gcmd.get_int('BED_TEMP_MIN', 50)
         hotbed_temp_max   = gcmd.get_int('BED_TEMP_MAX', 60)
-
         if self.force_generic or self.check_rfid_status():
             if vendor.lower() != "snapmaker":
                 vendor = "Generic"
-
         if vendor.lower() != "snapmaker" and subtype.lower() == "basic":
             subtype = ""
-
         if channel < 0 or channel >= 4:
-            raise gcmd.error("ACE channel{} is out of range[0, 3]".format(channel))
-
-        filament_detect = self.printer.lookup_object('filament_detect', None)
-        if filament_detect is None:
-            command = (
-                f"SET_PRINT_FILAMENT_CONFIG "
-                f"CONFIG_EXTRUDER={channel} "
-                f"VENDOR='{vendor}' "
-                f"FILAMENT_TYPE='{filament_type}' "
-                f"FILAMENT_SUBTYPE='{subtype}' "
-                f"FILAMENT_COLOR_RGBA={color}{alpha}")
-            self.gcode.run_script_from_command(command)
+            raise gcmd.error("ACE channel %d out of range [0,3]" % channel)
+        fd = self.printer.lookup_object('filament_detect', None)
+        if fd is None:
+            self.gcode.run_script_from_command(
+                "SET_PRINT_FILAMENT_CONFIG CONFIG_EXTRUDER=%d "
+                "VENDOR='%s' FILAMENT_TYPE='%s' FILAMENT_SUBTYPE='%s' "
+                "FILAMENT_COLOR_RGBA=%s%s"
+                % (channel, vendor, filament_type, subtype, color, alpha))
         else:
             info = copy.deepcopy(filament_protocol.FILAMENT_INFO_STRUCT)
-            info['VERSION']    = 1
-            info['VENDOR']     = vendor
-            info['MANUFACTURER'] = vendor
-            info['MAIN_TYPE']  = filament_type
-            info['SUB_TYPE']   = subtype
-            info['COLOR_NUMS'] = 1
-            info['RGB_1']      = int(color, 16)
-            info['ALPHA']      = int(alpha, 16)
-            info['ARGB_COLOR'] = (int(alpha, 16) << 24) | int(color, 16)
-            info['OFFICIAL']   = official in ['true', '1', 'yes']
-            info['LENGTH']     = length
-            info['DIAMETER']   = diameter
-            info['WEIGHT']     = weight
-            info['HOTEND_MIN_TEMP'] = extruder_temp_min
-            info['HOTEND_MAX_TEMP'] = extruder_temp_max
-            info['BED_TEMP']   = hotbed_temp_min if hotbed_temp_min > 0 else hotbed_temp_max
+            info['VERSION']          = 1
+            info['VENDOR']           = vendor
+            info['MANUFACTURER']     = vendor
+            info['MAIN_TYPE']        = filament_type
+            info['SUB_TYPE']         = subtype
+            info['COLOR_NUMS']       = 1
+            info['RGB_1']            = int(color, 16)
+            info['ALPHA']            = int(alpha, 16)
+            info['ARGB_COLOR']       = (int(alpha, 16) << 24) | int(color, 16)
+            info['OFFICIAL']         = official in ['true', '1', 'yes']
+            info['LENGTH']           = length
+            info['DIAMETER']         = diameter
+            info['WEIGHT']           = weight
+            info['HOTEND_MIN_TEMP']  = extruder_temp_min
+            info['HOTEND_MAX_TEMP']  = extruder_temp_max
+            info['BED_TEMP']         = hotbed_temp_min if hotbed_temp_min > 0 else hotbed_temp_max
             info['FIRST_LAYER_TEMP'] = info['HOTEND_MIN_TEMP']
             info['OTHER_LAYER_TEMP'] = info['HOTEND_MIN_TEMP']
-            info['MF_DATE']    = datetime.now().strftime("%Y%m%d")
-            info['CARD_UID']   = [random.randint(0, 255) for _ in range(7)]
-            filament_detect._filament_info_update(channel, info, is_clear=True)
+            info['MF_DATE']          = datetime.now().strftime("%Y%m%d")
+            info['CARD_UID']         = [random.randint(0, 255) for _ in range(7)]
+            fd._filament_info_update(channel, info, is_clear=True)
             self.gcode.respond_info(str(info))
 
 
