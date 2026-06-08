@@ -943,7 +943,6 @@ class AceDevice:
                 if self._last_filament_status[i] == 'preload' and current_status == 'ready':
                     if not ace_is_busy:
                         self._clear_assist_tracking(i)
-                        self._feed_start_times[i] = eventtime
                         self._active_feeds.add(i)
                         self.auto_feed_step[i] = 2
                         ace_is_busy = True
