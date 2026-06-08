@@ -255,7 +255,14 @@ class AceDevice:
             self.serial_name = candidates[0]
             logging.info("ACE: Found serial port: %s", self.serial_name)
         else:
-            logging.warning("ACE: No serial device found, stopping initialisation")
+            all_devices = glob.glob('/dev/serial/by-id/*')
+            if all_devices:
+                logging.warning("ACE: No ACE 2 Pro device found. Available serial devices:")
+                for d in sorted(all_devices):
+                    logging.warning("ACE:   %s", d)
+            else:
+                logging.warning("ACE: No serial devices found at all in /dev/serial/by-id/")
+            logging.warning("ACE: Stopping initialisation")
             return
 
         self.baud = config.getint('baud', 230400)
@@ -274,7 +281,6 @@ class AceDevice:
         self.disable_u1_rfid       = config.getboolean('disable_u1_rfid', False)
         self.force_generic         = config.getboolean('force_generic', False)
         self.disable_air_print     = config.getboolean('disable_air_print', False)
-        self.assist_stop_retract_length = config.getint('assist_stop_retract_length', 10)
 
         self.feed_lengths    = [config.getint('feed_length_slot%d' % (i+1), 1000) for i in range(4)]
         self.load_lengths    = [config.getint('load_length_slot%d' % (i+1), 850)  for i in range(4)]
@@ -314,8 +320,6 @@ class AceDevice:
 
         self.gcode.register_command('ACE_START_DRYING',    self.cmd_ACE_START_DRYING)
         self.gcode.register_command('ACE_STOP_DRYING',     self.cmd_ACE_STOP_DRYING)
-        self.gcode.register_command('ACE_GET_TEMP',        self.cmd_ACE_GET_TEMP)
-        self.gcode.register_command('ACE_GET_STATUS',      self.cmd_ACE_GET_STATUS)
         self.gcode.register_command('SET_FILAMENT_CONFIG', self.cmd_SET_FILAMENT_CONFIG)
 
     def feeder_mode(self):   return False
@@ -621,10 +625,9 @@ class AceDevice:
         self._clear_assist_tracking(idx)
         self._send(_CMD_STOP_FEED_OR_ROLLBACK, _pb_uint32(1, idx),
                    _decode_generic, self._assist_log_cb('stop_feed_assist', idx))
-        if self.assist_stop_retract_length > 0:
-            self._send(_CMD_FEED_OR_ROLLBACK,
-                       _pb_uint32(1, idx) + _pb_uint32(2, self.retract_speed) + _pb_uint32(3, self.assist_stop_retract_length) + _pb_uint32(4, _FEED_MODE_ROLLBACK),
-                       _decode_generic, None)
+        self._send(_CMD_FEED_OR_ROLLBACK,
+                   _pb_uint32(1, idx) + _pb_uint32(2, self.retract_speed) + _pb_uint32(3, 12) + _pb_uint32(4, _FEED_MODE_ROLLBACK),
+                   _decode_generic, None)
 
     def _start_unwind_assist(self, idx, why=''):
         logging.info("ACE: -> start_unwind_assist slot=%d (%s)", idx, why)
@@ -943,7 +946,6 @@ class AceDevice:
                 if self._last_filament_status[i] == 'preload' and current_status == 'ready':
                     if not ace_is_busy:
                         self._clear_assist_tracking(i)
-                        self._feed_start_times[i] = eventtime
                         self._active_feeds.add(i)
                         self.auto_feed_step[i] = 2
                         ace_is_busy = True
@@ -1069,67 +1071,6 @@ class AceDevice:
                 raise gcmd.error("ACE Error: " + response.get('msg', ''))
             self.gcode.respond_info('Stopped ACE drying')
         self._send(_CMD_DRYING, _pb_uint32(1, 0) + _pb_uint32(2, 0), _decode_generic, callback)
-
-    cmd_ACE_GET_TEMP_help = 'Read ACE 2 Pro temperatures and humidity'
-    def cmd_ACE_GET_TEMP(self, gcmd):
-        if not self._connected:
-            gcmd.respond_info("ACE_GET_TEMP: not connected"); return
-        def callback(_ace, response):
-            if not response or 'result' not in response:
-                gcmd.respond_info("ACE_GET_TEMP: no response"); return
-            r = response['result']
-            gcmd.respond_info(
-                "ACE 2 Pro temperatures:\n"
-                "  Box 1: %.1f C    Box 2: %.1f C\n"
-                "  PTC 1: %.1f C    PTC 2: %.1f C\n"
-                "  Env:   %.1f C    Humidity: %.1f %%"
-                % (r.get('box1_temp', 0.0), r.get('box2_temp', 0.0),
-                   r.get('ptc1_temp', 0.0), r.get('ptc2_temp', 0.0),
-                   r.get('env_temp',  0.0), r.get('env_humidity', 0.0)))
-        self._send(_CMD_GET_TEMP, b'', _decode_temp, callback)
-
-    cmd_ACE_GET_STATUS_help = 'Snapshot of ACE 2 Pro status'
-    def cmd_ACE_GET_STATUS(self, gcmd):
-        lines = [
-            "ACE 2 Pro Status",
-            "  Device:    %s @ %d baud" % (self.serial_name, self.baud),
-            "  Connected: %s" % ('yes' if self._connected else 'no'),
-        ]
-        if not self._connected:
-            gcmd.respond_info("\n".join(lines)); return
-        info = self._info or {}
-        if not info:
-            lines.append("  (no status yet)")
-            gcmd.respond_info("\n".join(lines)); return
-        lines.append("  Work:      %s" % info.get('status', '?'))
-        lines.append("  Box temp:  %s C    Humidity: %s %%" % (
-            info.get('temp', '?'), info.get('humidity', '?')))
-        dryer = info.get('dryer_status') or {}
-        if dryer:
-            def _fmt(v):
-                try:
-                    s = int(v); h, r = divmod(s, 3600); m, sc = divmod(r, 60)
-                    return "%02d:%02d:%02d" % (h, m, sc)
-                except: return str(v)
-            lines.append("  Dryer: %s target=%s C dur=%s remain=%s"
-                         % (dryer.get('status','?'), dryer.get('target_temp','?'),
-                            _fmt(dryer.get('duration','?')),
-                            _fmt(dryer.get('remain_time','?'))))
-        rfid_names = {0:'empty', 1:'unknown', 2:'identified', 3:'identifying'}
-        lines += ["", "Slots:"]
-        for i in range(4):
-            slots = info.get('slots') or []
-            slot  = slots[i] if i < len(slots) else {}
-            row   = "  %d: status=%-12s rfid=%s" % (
-                i, slot.get('status','-'),
-                rfid_names.get(slot.get('rfid'), str(slot.get('rfid','-'))))
-            if i in self._assist_active_slots:
-                row += "  assist=%s" % self._assist_mode_per_slot.get(i, '?')
-            lines.append(row)
-        lines += ["", "Feed assist: enabled=%s  idle_timeout=%ss  active=%s"
-                  % (self.enable_feed_assist, self.feed_assist_idle_timeout,
-                     sorted(self._assist_active_slots) or '[]')]
-        gcmd.respond_info("\n".join(lines))
 
     cmd_SET_FILAMENT_CONFIG_help = 'Set filament information'
     def cmd_SET_FILAMENT_CONFIG(self, gcmd):
