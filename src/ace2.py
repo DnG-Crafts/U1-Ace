@@ -269,7 +269,7 @@ class AceDevice:
         self.retract_lengths = [config.getint('retract_length_slot%d' % (i+1), 3000) for i in range(4)]
 
         all_devices = glob.glob('/dev/serial/by-id/*')
-        preferred = [d for d in all_devices if 'usb-1a86_USB' in d]
+        preferred = [d for d in all_devices if 'usb-1a86' in d]
         fallback = [d for d in all_devices if 'Klipper' not in d]
         candidates = preferred or fallback
         if candidates:
@@ -284,7 +284,7 @@ class AceDevice:
             else:
                 logging.warning("ACE: No serial devices found at all in /dev/serial/by-id/")
             logging.warning("ACE: Stopping initialisation")
-            return
+            
 
         self._connected       = False
         self._serial          = None
