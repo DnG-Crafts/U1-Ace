@@ -247,6 +247,23 @@ class AceDevice:
         self.gcode   = self.printer.lookup_object('gcode')
 
         self.serial_name = config.get('serial', '/dev/serial/by-id/*')
+        
+        all_devices = glob.glob('/dev/serial/by-id/*')
+        preferred = [d for d in all_devices if 'usb-1a86' in d]
+        fallback = [d for d in all_devices if 'Klipper' not in d]
+        candidates = preferred or fallback
+        if candidates:
+            self.serial_name = candidates[0]
+            logging.info("ACE: Found serial port: %s", self.serial_name)
+        else:
+            all_devices = glob.glob('/dev/serial/by-id/*')
+            if all_devices:
+                logging.warning("ACE: No ACE 2 Pro device found. Available serial devices:")
+                for d in sorted(all_devices):
+                    logging.warning("ACE:   %s", d)
+            else:
+                logging.warning("ACE: No serial devices found at all in /dev/serial/by-id/")
+
         self.baud = config.getint('baud', 230400)
         if self.baud != 230400:
             self.baud = 230400
@@ -267,24 +284,6 @@ class AceDevice:
         self.feed_lengths    = [config.getint('feed_length_slot%d' % (i+1), 1000) for i in range(4)]
         self.load_lengths    = [config.getint('load_length_slot%d' % (i+1), 850)  for i in range(4)]
         self.retract_lengths = [config.getint('retract_length_slot%d' % (i+1), 3000) for i in range(4)]
-
-        all_devices = glob.glob('/dev/serial/by-id/*')
-        preferred = [d for d in all_devices if 'usb-1a86' in d]
-        fallback = [d for d in all_devices if 'Klipper' not in d]
-        candidates = preferred or fallback
-        if candidates:
-            self.serial_name = candidates[0]
-            logging.info("ACE: Found serial port: %s", self.serial_name)
-        else:
-            all_devices = glob.glob('/dev/serial/by-id/*')
-            if all_devices:
-                logging.warning("ACE: No ACE 2 Pro device found. Available serial devices:")
-                for d in sorted(all_devices):
-                    logging.warning("ACE:   %s", d)
-            else:
-                logging.warning("ACE: No serial devices found at all in /dev/serial/by-id/")
-            logging.warning("ACE: Stopping initialisation")
-            
 
         self._connected       = False
         self._serial          = None
