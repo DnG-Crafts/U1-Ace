@@ -587,6 +587,10 @@ class AceDevice:
             f_type = s.get('type')
             brand = s.get('brand')
             color_list = s.get('color', [0, 0, 0])
+            
+            if "|" in f_type:
+                parts = f_type.split("|", 1)
+                f_type = parts[0]
 
             r, g, b = color_list[0], color_list[1], color_list[2]
             rgb_packed = "%02X%02X%02X" % (r, g, b)
@@ -609,16 +613,16 @@ class AceDevice:
             if sku.lower() != "snapmaker" and brand.lower() == "basic":
                 brand = ""
 
-            if filament_detect is None:
-                command = (
+            command = (
                     f"SET_PRINT_FILAMENT_CONFIG "
                     f"CONFIG_EXTRUDER={index} "
                     f"VENDOR='{sku}' "
                     f"FILAMENT_TYPE='{f_type}' "
                     f"FILAMENT_SUBTYPE='{brand}' "
                     f"FILAMENT_COLOR_RGBA={rgb_packed}{alpha_hex}")
-                self.gcode.run_script_from_command(command)
-            else:
+            self.gcode.run_script_from_command(command)
+
+            if filament_detect is not None:
                 length_map = {330: 1000, 247: 750, 198: 600, 165: 500, 82: 250}
                 total_len = s.get('total')
                 info = copy.deepcopy(filament_protocol.FILAMENT_INFO_STRUCT)

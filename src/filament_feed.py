@@ -219,6 +219,13 @@ class FeedPort:
             logging.error("[feed][port]: param[cb] is not a callable function!")
 
     def _adc_callback(self, read_time, read_value):
+        if self.ace_device is not None and not self.ace_device.feeder_mode():
+            self._filament_detected = self.ace_device.get_filament_detect(self.index)
+            if (None != self._port_event_callback and self._last_filament_detected != self._filament_detected):
+                self._last_filament_detected = self._filament_detected
+                self._port_event_callback(self._filament_detected)
+            return 
+    
         self._port_adc_value = read_value
         if (self._port_adc_value < self._threshold):
             self._filament_detected = True
@@ -666,8 +673,12 @@ class FilamentFeed:
                 return
             else:
                 self._set_channel_state(channel, FEED_STA_PRELOAD_PREPARE)
+                if self.ace_device is not None and not self.ace_device.feeder_mode():
+                    self.reactor.register_async_callback(
+                        (lambda et, c=self._do_feed, ch=channel, action=FEED_STA_PRELOAD_FINISH: c(ch, action)))
+                    return
                 self.reactor.register_async_callback(
-                    (lambda et, c=self._do_feed, ch=channel, action=FEED_ACT_PRELOAD: c(ch, action)))
+                    (lambda et, c=self._do_feed, ch=channel, action=FEED_ACT_PRELOAD: c(ch, action))) 
         else:
             if self.channel_active != channel:
                 self._set_light_state(channel, FEED_STA_WAIT_INSERT)

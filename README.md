@@ -1,6 +1,12 @@
 # U1 Ace
-Adding the Anycubic ACE to the U1 printer
-
+<p align="left">
+ Adding the Anycubic ACE to the U1 printer
+</p>
+<p align="left">
+<a href="https://github.com/DnG-Crafts/U1-Ace/blob/main/src/ace1.py"><img src="https://img.shields.io/badge/ACE-%20PRO%20%E2%9C%93-blue?logo=anycubic&logoColor=darkgrey"></a> 
+  <br>
+<a href="https://github.com/DnG-Crafts/U1-Ace/blob/main/src/ace2.py"><img src="https://img.shields.io/badge/ACE-%20PRO2%20%E2%9C%93-blue?logo=anycubic&logoColor=darkgrey"></a> 
+</p>
 
 <br><br>
 
@@ -53,7 +59,7 @@ These are the default config values found in `/extended/mods/ace_device.cfg`, yo
 
 ```
 [ace_device]
-
+ace_type: 1
 
 # these are the serial connection options and should not need to be modified
 
