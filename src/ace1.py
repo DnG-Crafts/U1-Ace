@@ -1,7 +1,66 @@
-# https://github.com/DnG-Crafts/U1-Ace
+# https://github.com/DnG-Crafts/U1-Ace v0.5
 import serial, threading, time, logging, json, struct, queue, glob, copy, random, configparser
 from datetime import datetime
 from . import filament_protocol
+
+ACE_TEMPERATURE_REPORT_TIME = 1.0
+
+class AceTemperatureSensor:
+    def __init__(self, config, ace_device):
+        self.printer = config.get_printer()
+        self.reactor = self.printer.get_reactor()
+        self.ace_device = ace_device
+        self.min_temp = -273.15
+        self.max_temp = 99999999.9
+        self._callback = None
+        self._mcu = None
+        self._sample_timer = self.reactor.register_timer(
+            self._sample_temperature, self.reactor.NEVER)
+        self.printer.register_event_handler(
+            'klippy:ready', self._handle_ready)
+        self.printer.register_event_handler(
+            'klippy:shutdown', self._handle_shutdown)
+
+    def setup_minmax(self, min_temp, max_temp):
+        self.min_temp = min_temp
+        self.max_temp = max_temp
+
+    def setup_callback(self, callback):
+        self._callback = callback
+
+    def set_read_tolerance(self, read_time_tolerance, update_ratio):
+        pass
+
+    def get_report_time_delta(self):
+        return ACE_TEMPERATURE_REPORT_TIME
+
+    def _handle_ready(self):
+        self._mcu = self.printer.lookup_object('mcu')
+        self.reactor.update_timer(self._sample_timer, self.reactor.NOW)
+
+    def _handle_shutdown(self):
+        self.reactor.update_timer(self._sample_timer, self.reactor.NEVER)
+
+    def _sample_temperature(self, eventtime):
+        if not self.ace_device._connected or self._callback is None:
+            return eventtime + ACE_TEMPERATURE_REPORT_TIME
+
+        temperature = self.ace_device._info.get('temp')
+        try:
+            temperature = float(temperature)
+        except (TypeError, ValueError):
+            return eventtime + ACE_TEMPERATURE_REPORT_TIME
+
+        if temperature < self.min_temp or temperature > self.max_temp:
+            self.printer.invoke_shutdown(
+                "ACE Pro temperature %.1f outside configured range "
+                "(%.1f:%.1f)" % (
+                    temperature, self.min_temp, self.max_temp))
+            return self.reactor.NEVER
+
+        read_time = self._mcu.estimated_print_time(eventtime)
+        self._callback(read_time, temperature)
+        return eventtime + ACE_TEMPERATURE_REPORT_TIME
 
 class AceDevice:
     def __init__(self, config):
@@ -90,7 +149,14 @@ class AceDevice:
 
         self.gcode.register_command('ACE_START_DRYING', self.cmd_ACE_START_DRYING)
         self.gcode.register_command('ACE_STOP_DRYING', self.cmd_ACE_STOP_DRYING)
+        self.gcode.register_command('ACE_DUMP_STATUS', self.cmd_ACE_DUMP_STATUS)
         self.gcode.register_command('SET_FILAMENT_CONFIG', self.cmd_SET_FILAMENT_CONFIG)
+
+        pheaters = self.printer.load_object(config, 'heaters')
+        pheaters.add_sensor_factory(
+            'temperature_ace_pro',
+            lambda sensor_config: AceTemperatureSensor(
+                sensor_config, self))
 
     def feeder_mode(self):
         return self.enable_feeder_mode
@@ -693,7 +759,7 @@ class AceDevice:
             if 'code' in response and response['code'] != 0:
                 raise gcmd.error("ACE Error: " + response['msg'])
             self.gcode.respond_info(
-                'Started ACE drying at %d°C for %d minutes' % (temperature, duration))
+                'Started ACE drying at %dC for %d minutes' % (temperature, duration))
         self.send_request(
             request={"method": "drying",
                      "params": {"temp": temperature, "fan_speed": 7000, "duration": duration}},
@@ -706,6 +772,15 @@ class AceDevice:
                 raise gcmd.error("ACE Error: " + response['msg'])
             self.gcode.respond_info('Stopped ACE drying')
         self.send_request(request={"method": "drying_stop"}, callback=callback)
+
+    cmd_ACE_DUMP_STATUS_help = 'Display the raw ACE Pro status data'
+    def cmd_ACE_DUMP_STATUS(self, gcmd):
+        if not self._connected:
+            raise gcmd.error('ACE Pro is not connected')
+        if not self._info:
+            raise gcmd.error('No ACE Pro status has been received yet')
+        formatted_status = json.dumps(self._info, indent=2, sort_keys=True)
+        self.gcode.respond_info('ACE Pro status:\n%s' % formatted_status)
 
     cmd_SET_FILAMENT_CONFIG_help = 'Set filament information'
     def cmd_SET_FILAMENT_CONFIG(self, gcmd):
